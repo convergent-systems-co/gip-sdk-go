@@ -24,7 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/convergent-systems-co/governed-intent-programming/sdk/go/protocol"
+	"github.com/convergent-systems-co/gip-sdk-go/protocol"
 )
 
 // Handler implements one leaf command.
