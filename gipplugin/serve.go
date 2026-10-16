@@ -93,6 +93,61 @@ func (r *Request) State(ctx context.Context, out any) error {
 	return r.session.call(ctx, protocol.MethodHostState, struct{}{}, out)
 }
 
+// Frontier asks the host for the current frontier (gip frontier discover
+// --output json) and decodes it into out. Requires work.read.
+func (r *Request) Frontier(ctx context.Context, out any) error {
+	var raw json.RawMessage
+	if err := r.session.call(ctx, protocol.MethodHostFrontier, struct{}{}, &raw); err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, out)
+}
+
+// Contract asks the host for a work unit's contract (gip.work-contract/v1)
+// and decodes it into out; it returns the project root. Requires
+// work.read.
+func (r *Request) Contract(ctx context.Context, work string, out any) (string, error) {
+	var res protocol.HostContractResult
+	if err := r.session.call(ctx, protocol.MethodHostContract, protocol.HostContractParams{Work: work}, &res); err != nil {
+		return "", err
+	}
+	return res.Root, json.Unmarshal(res.Contract, out)
+}
+
+// Act asks the host to submit a work transition as a trusted agent
+// principal. Requires work.execute. A refusal is a result, not an error.
+func (r *Request) Act(ctx context.Context, p protocol.HostActParams) (*protocol.HostActResult, error) {
+	var out protocol.HostActResult
+	if err := r.session.call(ctx, protocol.MethodHostAct, p, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Check asks the host to run a predicate's defined check and record what
+// it observed. Requires work.execute.
+func (r *Request) Check(ctx context.Context, p protocol.HostCheckParams) (*protocol.HostCheckResult, error) {
+	var out protocol.HostCheckResult
+	if err := r.session.call(ctx, protocol.MethodHostCheck, p, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Config asks the host for this plugin's configuration file, parsed, and
+// decodes it into out. It reports false when there is none. Requires
+// config.read.
+func (r *Request) Config(ctx context.Context, out any) (bool, error) {
+	var res protocol.HostConfigResult
+	if err := r.session.call(ctx, protocol.MethodHostConfig, struct{}{}, &res); err != nil {
+		return false, err
+	}
+	if !res.Found {
+		return false, nil
+	}
+	return true, json.Unmarshal(res.Config, out)
+}
+
 // Fail returns a structured command failure with a stable error id.
 func Fail(errorID, format string, a ...any) error {
 	return protocol.NewError(protocol.CodeCommandFailed, errorID, fmt.Sprintf(format, a...))
