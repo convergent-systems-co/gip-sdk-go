@@ -20,7 +20,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/convergent-systems-co/governed-intent-programming/sdk/go/protocol"
+	"github.com/convergent-systems-co/gip-sdk-go/protocol"
 )
 
 // Check is one conformance assertion.

@@ -1,3 +1,3 @@
-module github.com/convergent-systems-co/governed-intent-programming/sdk/go
+module github.com/convergent-systems-co/gip-sdk-go
 
 go 1.22
