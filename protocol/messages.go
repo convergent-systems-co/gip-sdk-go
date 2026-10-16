@@ -137,6 +137,7 @@ const (
 	ProposeInvariant      = "invariant"
 	ProposeWork           = "work"
 	ProposeInterpretation = "interpretation"
+	ProposeAmbiguity      = "ambiguity"
 )
 
 // CostEntry is one resource observation.
