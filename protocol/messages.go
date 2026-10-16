@@ -306,12 +306,23 @@ const (
 
 // HostActParams asks the host to submit one work transition as principal
 // As, which must be an agent principal the plugin was trusted to act as.
-// For submit, ResultPath names a gip.work-result/v1 document under the
-// project's .gip/results/<work>/ and RunChecks runs the defined checks.
+//
+// Workspace is where the work was done: the project root (default) or a
+// linked git worktree of the project's repository, so several units can
+// be in flight at once. Checks run, code is observed and the qualified
+// commit is taken there.
+//
+// RequestID makes the act idempotent: re-sending it (an executor resuming
+// after a crash, or a pool reporting late) replays the recorded result.
+//
+// For submit, ResultPath names a gip.work-result/v1 document under
+// <workspace>/.gip/results/<work>/ and RunChecks runs the defined checks.
 type HostActParams struct {
 	Kind       string `json:"kind"`
 	Work       string `json:"work"`
 	As         string `json:"as"`
+	Workspace  string `json:"workspace,omitempty"`
+	RequestID  string `json:"request_id,omitempty"`
 	ResultPath string `json:"result_path,omitempty"`
 	RunChecks  bool   `json:"run_checks,omitempty"`
 	Rationale  string `json:"rationale,omitempty"`
@@ -332,6 +343,8 @@ type HostCheckParams struct {
 	Work      string `json:"work"`
 	Predicate string `json:"predicate"`
 	As        string `json:"as"`
+	Workspace string `json:"workspace,omitempty"` // as in HostActParams
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // HostCheckResult reports the observed run.
