@@ -29,7 +29,7 @@ An executor carries work units through the GIP process: it reads the frontier an
 | Permission | Host methods (`Request` helpers) |
 |---|---|
 | `work.read` | `host/frontier` (`Frontier`), `host/contract` (`Contract`, which also returns the project root) |
-| `work.execute` | `host/act` (`Act`: start, submit, qualify or integrate), `host/check` (`Check`: the host runs a predicate's defined check and records what it observed) |
+| `work.execute` | `host/act` (`Act`: start, submit, qualify, integrate, or rework to resolve a merge conflict), `host/check` (`Check`: the host runs a predicate's defined check and records what it observed) |
 | `config.read` | `host/config` (`Config`): the plugin's own `<config>/<short name>.yaml`, parsed by the host |
 
 An executor never acts as itself. `Act` and `Check` name an agent principal, which must be one the human listed with `gip plugin trust --act-as`, bound in the project and holding the grants for the transition. A refusal is a disposition, not an error. Reviews and acceptance stay with humans.
