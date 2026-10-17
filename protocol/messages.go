@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 )
 
 // Transport: JSON-RPC 2.0, one JSON object per line (NDJSON) on the plugin's
@@ -34,6 +35,13 @@ const (
 	MethodHostAct      = "host/act"      // plugin -> host, request (work.execute)
 	MethodHostCheck    = "host/check"    // plugin -> host, request (work.execute)
 	MethodHostConfig   = "host/config"   // plugin -> host, request (config.read)
+
+	// Lease and progress methods (additive in SDK v0.3.0, ADR-0015).
+	// host/progress reports what a unit the executor holds is doing; it
+	// is telemetry, never a governed transition. host/execution reads
+	// the leases and latest progress of units in flight.
+	MethodHostProgress  = "host/progress"  // plugin -> host, request (work.execute)
+	MethodHostExecution = "host/execution" // plugin -> host, request (work.read)
 )
 
 // Error codes. -32xxx are JSON-RPC; -31xxx are gip-specific.
@@ -307,7 +315,36 @@ const (
 	// branch). Rationale carries the reason. The unit then needs fresh
 	// evidence, review and qualification.
 	ActRework = "rework"
+	// ActRenew renews the lease the executor holds on a unit it started
+	// (SDK v0.3.0). Lease names the lease being renewed; a lease that was
+	// reclaimed or replaced is refused (LEASE_RECLAIMED, LEASE_SUPERSEDED).
+	ActRenew = "renew"
+	// ActReclaim returns a unit whose lease has expired to the frontier
+	// (back to not started), recording the holder that lost it (SDK
+	// v0.3.0). It needs the work.reclaim grant; a live lease is refused
+	// (LEASE_ACTIVE).
+	ActReclaim = "reclaim"
 )
+
+// Lease states.
+const (
+	LeaseActive  = "active"
+	LeaseExpired = "expired"
+)
+
+// Lease is the time-limited claim a work.start grants its executor
+// (ADR-0015). Times are the gateway's ledger times; State is evaluated at
+// the time the host answered.
+type Lease struct {
+	ID         string    `json:"id"`
+	Holder     string    `json:"holder"`
+	TTLSeconds int       `json:"ttl_seconds"`
+	GrantedAt  time.Time `json:"granted_at"`
+	RenewedAt  time.Time `json:"renewed_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Renewals   int       `json:"renewals"`
+	State      string    `json:"state"` // active | expired
+}
 
 // HostActParams asks the host to submit one work transition as principal
 // As, which must be an agent principal the plugin was trusted to act as.
@@ -331,6 +368,14 @@ type HostActParams struct {
 	ResultPath string `json:"result_path,omitempty"`
 	RunChecks  bool   `json:"run_checks,omitempty"`
 	Rationale  string `json:"rationale,omitempty"`
+	// Lease names the lease the act is made under (submit, renew): the
+	// id a start returned. A stale holder's act is refused even when it
+	// acts as the same principal as the current holder. Empty: only the
+	// principal is checked.
+	Lease string `json:"lease,omitempty"`
+	// LeaseSeconds asks for a lease time to live other than the
+	// project's default (start, renew).
+	LeaseSeconds int `json:"lease_seconds,omitempty"`
 }
 
 // HostActResult is the gateway's disposition.
@@ -340,6 +385,88 @@ type HostActResult struct {
 	Reasons     []string `json:"reasons"`
 	Ceremony    string   `json:"ceremony,omitempty"`
 	EventSeq    int64    `json:"event_seq"`
+	// Lease is the unit's lease after a start, renew or rework the act's
+	// principal holds (SDK v0.3.0). A replayed start returns the lease it
+	// granted only while that lease is still the unit's.
+	Lease *Lease `json:"lease,omitempty"`
+}
+
+// HostProgressParams reports progress on a unit the executor holds, as
+// principal As (one the plugin was trusted to act as). Phase is a short
+// identifier (for example worktree, agent, checks, submit, integrate);
+// Message is a short human-readable line; Percent is optional (0-100).
+// Cost is what the unit has consumed so far, informational: it is shown
+// with the progress and never added to cost totals (those come from the
+// command's InvokeResult.Cost).
+type HostProgressParams struct {
+	Work    string      `json:"work"`
+	As      string      `json:"as"`
+	Lease   string      `json:"lease,omitempty"`
+	Phase   string      `json:"phase"`
+	Message string      `json:"message,omitempty"`
+	Percent *float64    `json:"percent,omitempty"`
+	Cost    []CostEntry `json:"cost,omitempty"`
+}
+
+// HostProgressResult says whether progress was recorded. A report for a
+// unit the principal does not hold, or under a lease that is no longer
+// the unit's, is not recorded: Code says why (NOT_EXECUTOR,
+// NOT_IN_PROGRESS, LEASE_RECLAIMED, LEASE_SUPERSEDED), and an executor
+// should stop working on the unit. Lease is the unit's current lease.
+type HostProgressResult struct {
+	Recorded bool   `json:"recorded"`
+	Code     string `json:"code,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	Lease    *Lease `json:"lease,omitempty"`
+}
+
+// Progress phases the executor reports. Hosts accept any short
+// identifier; these are the conventional ones.
+const (
+	PhaseClaimed   = "claimed"
+	PhaseWorktree  = "worktree"
+	PhaseAgent     = "agent"
+	PhaseChecks    = "checks"
+	PhaseSubmit    = "submit"
+	PhaseQualify   = "qualify"
+	PhaseIntegrate = "integrate"
+	PhaseDone      = "done"
+)
+
+// HostExecutionParams asks for units in flight: one work unit, or every
+// unit that is in progress when Work is empty. Limit bounds the progress
+// events returned per unit (latest last; default 20).
+type HostExecutionParams struct {
+	Work  string `json:"work,omitempty"`
+	Limit int    `json:"limit,omitempty"`
+}
+
+// ProgressEvent is one recorded progress report.
+type ProgressEvent struct {
+	At      time.Time   `json:"at"`
+	Work    string      `json:"work"`
+	Lease   string      `json:"lease,omitempty"`
+	Phase   string      `json:"phase"`
+	Message string      `json:"message,omitempty"`
+	Percent *float64    `json:"percent,omitempty"`
+	Cost    []CostEntry `json:"cost,omitempty"`
+	Plugin  string      `json:"plugin,omitempty"`
+}
+
+// ExecutionStatus is one unit's execution, lease and recent progress.
+type ExecutionStatus struct {
+	Work      string          `json:"work"`
+	Execution string          `json:"execution"`
+	Executor  string          `json:"executor,omitempty"`
+	Lease     *Lease          `json:"lease,omitempty"`
+	Progress  []ProgressEvent `json:"progress"`
+}
+
+// HostExecutionResult answers MethodHostExecution. EvaluatedAt is the
+// time lease states were evaluated at.
+type HostExecutionResult struct {
+	EvaluatedAt time.Time         `json:"evaluated_at"`
+	Units       []ExecutionStatus `json:"units"`
 }
 
 // HostCheckParams asks the host to run a predicate's defined check for a
