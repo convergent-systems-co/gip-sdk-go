@@ -127,27 +127,43 @@ type PlanWork struct {
 // electable. Ref is the bound project, goal or work id. Rank is a WU's
 // place in the election order fixed at planning time (1 first).
 type PlanNode struct {
-	Address    string     `json:"address"`
-	Parent     string     `json:"parent,omitempty"`
-	Branch     string     `json:"branch,omitempty"`
-	Depth      int        `json:"depth"`
-	Label      string     `json:"label"`
-	Kind       string     `json:"kind"`
-	Ref        string     `json:"ref"`
-	Pass       int        `json:"pass"`
-	Lifecycle  string     `json:"lifecycle"`
-	Status     string     `json:"status"`
-	Reasons    []Reason   `json:"reasons"`
-	Rank       int        `json:"rank,omitempty"`
-	Unblocks   int        `json:"unblocks,omitempty"`
-	Chain      int        `json:"chain,omitempty"`
-	DependsOn  []PlanEdge `json:"depends_on"`
-	Children   []string   `json:"children"`
-	Findings   []string   `json:"findings"`
-	Replaces   string     `json:"replaces,omitempty"`
-	ReplacedBy string     `json:"replaced_by,omitempty"`
-	Work       *PlanWork  `json:"work,omitempty"`
+	Address    string       `json:"address"`
+	Parent     string       `json:"parent,omitempty"`
+	Branch     string       `json:"branch,omitempty"`
+	Depth      int          `json:"depth"`
+	Label      string       `json:"label"`
+	Kind       string       `json:"kind"`
+	Ref        string       `json:"ref"`
+	Pass       int          `json:"pass"`
+	Lifecycle  string       `json:"lifecycle"`
+	Status     string       `json:"status"`
+	Reasons    []Reason     `json:"reasons"`
+	Rank       int          `json:"rank,omitempty"`
+	Unblocks   int          `json:"unblocks,omitempty"`
+	Chain      int          `json:"chain,omitempty"`
+	DependsOn  []PlanEdge   `json:"depends_on"`
+	Children   []string     `json:"children"`
+	Findings   []string     `json:"findings"`
+	Replaces   string       `json:"replaces,omitempty"`
+	ReplacedBy string       `json:"replaced_by,omitempty"`
+	Sources    []PlanSource `json:"sources,omitempty"`
+	Confidence string       `json:"confidence,omitempty"`
+	Work       *PlanWork    `json:"work,omitempty"`
 }
+
+// PlanSource is one planner run (and its model) that produced a node.
+type PlanSource struct {
+	Planner string `json:"planner"`
+	Model   string `json:"model,omitempty"`
+}
+
+// Confidence of a node two independent planners planned (initial and final
+// discovery run two models; milestone and blocking passes one).
+const (
+	ConfidenceAgreed     = "agreed"
+	ConfidenceSingle     = "single-source"
+	ConfidenceReconciled = "reconciled"
+)
 
 // Milestone is the root's or a first-level branch's state. Planned: a
 // pass already planned it at its current epoch.
@@ -192,6 +208,8 @@ type PlanDocument struct {
 	StateHead   int64          `json:"state_head"`
 	Pass        int            `json:"pass"`
 	Planned     bool           `json:"planned"`
+	Planners    []PlanSource   `json:"planners,omitempty"`
+	SingleModel bool           `json:"single_model,omitempty"`
 	Root        string         `json:"root,omitempty"`
 	EvaluatedAt time.Time      `json:"evaluated_at"`
 	Ready       []string       `json:"ready"`
@@ -251,6 +269,9 @@ type PlanPass struct {
 	Edges        []PlanEdgeFields    `json:"edges,omitempty"`
 	Cancel       []PlanRetire        `json:"cancel,omitempty"`
 	Findings     []FindingResolution `json:"findings,omitempty"`
+	// Planners are the independent planner runs this pass reconciles.
+	// Initial and final passes with fewer than two are flagged single-model.
+	Planners []PlanSource `json:"planners,omitempty"`
 }
 
 // PlanBinding names an existing goal or work unit (or, for the root, the
@@ -264,14 +285,16 @@ type PlanBinding struct {
 // and DependsOn are addresses or the Ref of an earlier node in the pass;
 // gip assigns the address (the next number never used under the parent).
 type PlanNodeFields struct {
-	Ref       string        `json:"ref,omitempty"`
-	Parent    string        `json:"parent"`
-	Label     string        `json:"label,omitempty"`
-	Bind      *PlanBinding  `json:"bind,omitempty"`
-	Goal      *PlanGoal     `json:"goal,omitempty"`
-	Work      *PlanWorkUnit `json:"work,omitempty"`
-	DependsOn []string      `json:"depends_on,omitempty"`
-	Replaces  string        `json:"replaces,omitempty"`
+	Ref        string        `json:"ref,omitempty"`
+	Parent     string        `json:"parent"`
+	Label      string        `json:"label,omitempty"`
+	Bind       *PlanBinding  `json:"bind,omitempty"`
+	Goal       *PlanGoal     `json:"goal,omitempty"`
+	Work       *PlanWorkUnit `json:"work,omitempty"`
+	DependsOn  []string      `json:"depends_on,omitempty"`
+	Replaces   string        `json:"replaces,omitempty"`
+	Sources    []PlanSource  `json:"sources,omitempty"`
+	Confidence string        `json:"confidence,omitempty"`
 }
 
 // PlanGoal creates and admits a sub-goal (under the planner's goal.admit).
