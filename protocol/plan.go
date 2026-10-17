@@ -46,6 +46,14 @@ const (
 	NodeCancelled  = "cancelled"
 )
 
+// Node kinds.
+const (
+	KindRoot    = "root"
+	KindGoal    = "goal"
+	KindSubGoal = "sub-goal"
+	KindWU      = "wu"
+)
+
 // Milestone statuses: complete and stuck are terminal.
 const (
 	MilestoneComplete = "complete"
@@ -114,9 +122,10 @@ type PlanWork struct {
 	Reasons    []Reason `json:"reasons"`
 }
 
-// PlanNode is one node of the plan document. Kind is "project", "goal"
-// or "work"; Ref is the goal or work id. Rank is the work leaf's place in
-// the election order fixed at planning time (1 first).
+// PlanNode is one node of the plan document. Kind is root, goal (first
+// level), sub-goal or wu: every leaf is a work unit (WU) and only WUs are
+// electable. Ref is the bound project, goal or work id. Rank is a WU's
+// place in the election order fixed at planning time (1 first).
 type PlanNode struct {
 	Address    string     `json:"address"`
 	Parent     string     `json:"parent,omitempty"`

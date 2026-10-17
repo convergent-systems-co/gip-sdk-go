@@ -54,7 +54,7 @@ A `start` grants the executor a time-limited **lease** on the unit (ADR-0015 in 
 
 ### Plan-once frontier (v0.4.0)
 
-gip plans the work once, up front, as a tree of stable addresses (A, B, B2, B2.1.1) with dependency edges that may cross branches, and keeps a **plan document** (`gip.plan-document/v1`) up to date incrementally (ADR-0021 in the gip repository). The plan never authorizes anything: every claim still goes through `Act`.
+gip plans the work once, up front, as a tree of stable addresses (A, B, B2, B2.1.1): the root, goals, sub-goals and, as every leaf, work units (WUs). Dependency edges that may cross branches, and keeps a **plan document** (`gip.plan-document/v1`) up to date incrementally (ADR-0021 in the gip repository). The plan never authorizes anything: every claim still goes through `Act`.
 
 | Method (`Request` helper) | Permission | Purpose |
 |---|---|---|
