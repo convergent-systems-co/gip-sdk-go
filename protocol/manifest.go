@@ -137,12 +137,14 @@ const (
 	PermWorkRead    = "work.read"    // frontier and work contracts
 	PermWorkExecute = "work.execute" // act on work as a trusted agent principal; host-run checks
 	PermConfigRead  = "config.read"  // the plugin's own <config>/<name>.yaml
+	// PermPlanWrite (SDK v0.4.0) is declared in plan.go.
 )
 
 // KnownPermissions is the closed set accepted by protocol v1.
 var KnownPermissions = []string{
 	PermTelemetryEmit, PermStateRead, PermIntentRead, PermProposalsSubmit,
 	PermEvidenceSubmit, PermPluginData, PermWorkRead, PermWorkExecute, PermConfigRead,
+	PermPlanWrite,
 }
 
 // MaxCommandTimeoutSeconds bounds a command's declared timeout.
