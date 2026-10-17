@@ -302,6 +302,11 @@ const (
 	ActSubmit    = "submit"
 	ActQualify   = "qualify"
 	ActIntegrate = "integrate"
+	// ActRework sends submitted, unintegrated work back to the executor
+	// (for example to resolve a merge conflict with the integration
+	// branch). Rationale carries the reason. The unit then needs fresh
+	// evidence, review and qualification.
+	ActRework = "rework"
 )
 
 // HostActParams asks the host to submit one work transition as principal
