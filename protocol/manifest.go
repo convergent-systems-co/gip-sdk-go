@@ -109,13 +109,16 @@ const (
 	CapProduceEvidence             = "produce.evidence"
 	CapExecuteWork                 = "execute.work"
 	CapVisualize                   = "visualize"
+	// CapPlanWork (SDK v0.4.0): the plugin plans the frontier through
+	// host/plan/pass (gip ADR-0021).
+	CapPlanWork = "plan.work"
 )
 
 // KnownCapabilities is the closed set accepted by protocol v1.
 var KnownCapabilities = []string{
 	CapProposeIntentInterpretation, CapProposeGoals, CapProposeInvariants,
 	CapProposeWork, CapProposeGraphRules, CapProduceEvidence, CapExecuteWork,
-	CapVisualize,
+	CapVisualize, CapPlanWork,
 }
 
 // ReservedCapabilityPrefixes name powers only the core holds. A manifest

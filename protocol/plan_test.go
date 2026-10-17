@@ -21,6 +21,13 @@ func TestPlanMessages(t *testing.T) {
 	if !found {
 		t.Fatal("plan.write is a known permission")
 	}
+	found = false
+	for _, c := range KnownCapabilities {
+		found = found || c == CapPlanWork
+	}
+	if !found {
+		t.Fatal("plan.work is a known capability")
+	}
 	b, _ := json.Marshal(HostPlanParams{})
 	if string(b) != "{}" {
 		t.Fatalf("an empty plan request is {}: %s", b)
