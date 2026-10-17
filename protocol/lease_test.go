@@ -14,7 +14,7 @@ func TestLeaseAndProgressMessages(t *testing.T) {
 	// Fields added to existing messages are omitted when unused, so v0.2.0
 	// peers see exactly what they saw before.
 	b, _ := json.Marshal(HostActParams{Kind: ActStart, Work: "w", As: "agent:x"})
-	if strings.Contains(string(b), "lease") {
+	if strings.Contains(string(b), "lease") || strings.Contains(string(b), "rotate") {
 		t.Fatalf("unused lease fields must be omitted: %s", b)
 	}
 	b, _ = json.Marshal(HostActResult{Disposition: "ACCEPTED", Reasons: []string{}})
@@ -32,6 +32,10 @@ func TestLeaseAndProgressMessages(t *testing.T) {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("act result %s lacks %s", b, want)
 		}
+	}
+	b, _ = json.Marshal(HostActParams{Kind: ActRenew, Work: "w", As: "agent:x", Lease: "lease-1", RotateLease: true})
+	if !strings.Contains(string(b), `"rotate_lease":true`) {
+		t.Fatalf("rotate_lease: %s", b)
 	}
 	pct := 40.0
 	p := HostProgressParams{Work: "w", As: "agent:x", Lease: "lease-1", Phase: PhaseChecks, Message: "running 2 checks", Percent: &pct,

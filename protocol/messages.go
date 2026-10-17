@@ -318,11 +318,15 @@ const (
 	// ActRenew renews the lease the executor holds on a unit it started
 	// (SDK v0.3.0). Lease names the lease being renewed; a lease that was
 	// reclaimed or replaced is refused (LEASE_RECLAIMED, LEASE_SUPERSEDED).
+	// A renewal by a principal whose work.start authority is gone is
+	// refused outright.
 	ActRenew = "renew"
 	// ActReclaim returns a unit whose lease has expired to the frontier
 	// (back to not started), recording the holder that lost it (SDK
-	// v0.3.0). It needs the work.reclaim grant; a live lease is refused
-	// (LEASE_ACTIVE).
+	// v0.3.0). It needs a grant naming work.reclaim (wildcards do not cover
+	// it for agents); a live lease is refused (LEASE_ACTIVE), and a claim
+	// held by a human needs a human (HUMAN_REQUIRED). Rationale is the
+	// reason: plain text, one line.
 	ActReclaim = "reclaim"
 )
 
@@ -374,8 +378,16 @@ type HostActParams struct {
 	// principal is checked.
 	Lease string `json:"lease,omitempty"`
 	// LeaseSeconds asks for a lease time to live other than the
-	// project's default (start, renew).
+	// project's default (start, renew). The host clamps it to the
+	// project's maximum.
 	LeaseSeconds int `json:"lease_seconds,omitempty"`
+	// RotateLease, on renew, replaces the named lease with a new one for
+	// the same holder (its id is returned in the result). An executor
+	// resuming a unit after a restart rotates, so an earlier instance
+	// still holding the old id is refused (LEASE_SUPERSEDED). After a
+	// rotation or a reclaim, every renew and submit must name the lease
+	// (LEASE_REQUIRED).
+	RotateLease bool `json:"rotate_lease,omitempty"`
 }
 
 // HostActResult is the gateway's disposition.
