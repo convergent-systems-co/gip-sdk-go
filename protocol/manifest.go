@@ -60,6 +60,10 @@ type Command struct {
 	Permissions  []string        `json:"permissions,omitempty"`
 	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
 	Subcommands  []Command       `json:"subcommands,omitempty"`
+	// TimeoutSeconds is how long one invocation may run, when longer than
+	// the host's default (for example an executor driving a model). The
+	// host may cap it.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 }
 
 // Argument declares one typed command argument. Positional arguments are
@@ -129,13 +133,20 @@ const (
 	PermProposalsSubmit = "proposals.submit"
 	PermEvidenceSubmit  = "evidence.submit"
 	PermPluginData      = "plugin-data"
+	// Executor permissions (SDK v0.2.0).
+	PermWorkRead    = "work.read"    // frontier and work contracts
+	PermWorkExecute = "work.execute" // act on work as a trusted agent principal; host-run checks
+	PermConfigRead  = "config.read"  // the plugin's own <config>/<name>.yaml
 )
 
 // KnownPermissions is the closed set accepted by protocol v1.
 var KnownPermissions = []string{
 	PermTelemetryEmit, PermStateRead, PermIntentRead, PermProposalsSubmit,
-	PermEvidenceSubmit, PermPluginData,
+	PermEvidenceSubmit, PermPluginData, PermWorkRead, PermWorkExecute, PermConfigRead,
 }
+
+// MaxCommandTimeoutSeconds bounds a command's declared timeout.
+const MaxCommandTimeoutSeconds = 7200
 
 // ShortName returns the plugin name without the "gip-plugin-" prefix.
 func (m *Manifest) ShortName() string { return strings.TrimPrefix(m.Name, "gip-plugin-") }
@@ -266,9 +277,12 @@ func validateCommand(c *Command, cmdPath []string, pluginPerms []string) []error
 			add("permission %q is not declared at plugin level", p)
 		}
 	}
+	if c.TimeoutSeconds < 0 || c.TimeoutSeconds > MaxCommandTimeoutSeconds {
+		add("timeout_seconds must be between 0 and %d", MaxCommandTimeoutSeconds)
+	}
 	if len(c.Subcommands) > 0 {
-		if len(c.Arguments) > 0 || len(c.OutputSchema) > 0 || len(c.Permissions) > 0 {
-			add("a command group cannot declare arguments, permissions or an output schema")
+		if len(c.Arguments) > 0 || len(c.OutputSchema) > 0 || len(c.Permissions) > 0 || c.TimeoutSeconds != 0 {
+			add("a command group cannot declare arguments, permissions, an output schema or a timeout")
 		}
 		seen := map[string]bool{}
 		for i := range c.Subcommands {

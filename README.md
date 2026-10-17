@@ -22,6 +22,26 @@ Rules a plugin must follow:
 - Stdout belongs to the protocol. Use stderr or the telemetry calls for anything else.
 - Report cost only with a basis (`measured`, `reported` or `estimated`).
 
+### Executor plugins (v0.2.0)
+
+An executor carries work units through the GIP process: it reads the frontier and contracts, and acts on work. It needs three host permissions, each granted explicitly at trust time:
+
+| Permission | Host methods (`Request` helpers) |
+|---|---|
+| `work.read` | `host/frontier` (`Frontier`), `host/contract` (`Contract`, which also returns the project root) |
+| `work.execute` | `host/act` (`Act`: start, submit, qualify or integrate), `host/check` (`Check`: the host runs a predicate's defined check and records what it observed) |
+| `config.read` | `host/config` (`Config`): the plugin's own `<config>/<short name>.yaml`, parsed by the host |
+
+An executor never acts as itself. `Act` and `Check` name an agent principal, which must be one the human listed with `gip plugin trust --act-as`, bound in the project and holding the grants for the transition. A refusal is a disposition, not an error. Reviews and acceptance stay with humans.
+
+The same interface serves a local CLI executor (Claude, Codex, Copilot) and a remote one such as a Conduit adapter with pools:
+
+- **Several units at once.** `Act` and `Check` take a `workspace`: the project root, or a linked git worktree of the project. The host runs checks, observes code and records the qualified commit there.
+- **Resumable.** A stable `request_id` makes each act idempotent: re-sending it replays the recorded result.
+- **Claims.** `start` is the claim. A unit already in progress cannot be started by another executor.
+
+A command may declare `timeout_seconds`, up to 7200, when one invocation runs longer than the host's default.
+
 The full protocol specification is in the gip repository under `docs/spec/plugin-protocol.md`. A reference plugin is [gip-plugin-discovery](https://github.com/convergent-systems-co/gip-plugin-discovery).
 
 ## License

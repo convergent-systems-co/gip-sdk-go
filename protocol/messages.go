@@ -25,6 +25,15 @@ const (
 	MethodTelemetry  = "telemetry/emit" // plugin -> host, notification
 	MethodHostIntent = "host/intent"    // plugin -> host, request (intent.read)
 	MethodHostState  = "host/state"     // plugin -> host, request (state.read)
+
+	// Executor methods (protocol v1, additive in SDK v0.2.0). An executor
+	// plugin reads the frontier and work contracts, and acts on work only
+	// as an agent principal the human named when trusting it (--act-as).
+	MethodHostFrontier = "host/frontier" // plugin -> host, request (work.read)
+	MethodHostContract = "host/contract" // plugin -> host, request (work.read)
+	MethodHostAct      = "host/act"      // plugin -> host, request (work.execute)
+	MethodHostCheck    = "host/check"    // plugin -> host, request (work.execute)
+	MethodHostConfig   = "host/config"   // plugin -> host, request (config.read)
 )
 
 // Error codes. -32xxx are JSON-RPC; -31xxx are gip-specific.
@@ -273,4 +282,85 @@ func ErrorResponse(id *json.RawMessage, e *Error) *Message {
 // NewError builds a structured error with a stable identifier.
 func NewError(code int, id, message string) *Error {
 	return &Error{Code: code, Message: message, Data: &ErrorData{ID: id}}
+}
+
+// HostContractParams asks for one work unit's contract.
+type HostContractParams struct {
+	Work string `json:"work"`
+}
+
+// HostContractResult is the work contract (gip.work-contract/v1) and the
+// project root the executor works in.
+type HostContractResult struct {
+	Root     string          `json:"root"`
+	Contract json.RawMessage `json:"contract"`
+}
+
+// Act kinds an executor may request.
+const (
+	ActStart     = "start"
+	ActSubmit    = "submit"
+	ActQualify   = "qualify"
+	ActIntegrate = "integrate"
+)
+
+// HostActParams asks the host to submit one work transition as principal
+// As, which must be an agent principal the plugin was trusted to act as.
+//
+// Workspace is where the work was done: the project root (default) or a
+// linked git worktree of the project's repository, so several units can
+// be in flight at once. Checks run, code is observed and the qualified
+// commit is taken there.
+//
+// RequestID makes the act idempotent: re-sending it (an executor resuming
+// after a crash, or a pool reporting late) replays the recorded result.
+//
+// For submit, ResultPath names a gip.work-result/v1 document under
+// <workspace>/.gip/results/<work>/ and RunChecks runs the defined checks.
+type HostActParams struct {
+	Kind       string `json:"kind"`
+	Work       string `json:"work"`
+	As         string `json:"as"`
+	Workspace  string `json:"workspace,omitempty"`
+	RequestID  string `json:"request_id,omitempty"`
+	ResultPath string `json:"result_path,omitempty"`
+	RunChecks  bool   `json:"run_checks,omitempty"`
+	Rationale  string `json:"rationale,omitempty"`
+}
+
+// HostActResult is the gateway's disposition.
+type HostActResult struct {
+	Disposition string   `json:"disposition"`
+	Code        string   `json:"code,omitempty"`
+	Reasons     []string `json:"reasons"`
+	Ceremony    string   `json:"ceremony,omitempty"`
+	EventSeq    int64    `json:"event_seq"`
+}
+
+// HostCheckParams asks the host to run a predicate's defined check for a
+// work unit and record what it observed, as principal As.
+type HostCheckParams struct {
+	Work      string `json:"work"`
+	Predicate string `json:"predicate"`
+	As        string `json:"as"`
+	Workspace string `json:"workspace,omitempty"` // as in HostActParams
+	RequestID string `json:"request_id,omitempty"`
+}
+
+// HostCheckResult reports the observed run.
+type HostCheckResult struct {
+	Result      string `json:"result"` // PASS | FAIL | UNKNOWN
+	ExitCode    int    `json:"exit_code"`
+	Evidence    string `json:"evidence"`
+	OutputTail  string `json:"output_tail"`
+	Disposition string `json:"disposition"`
+}
+
+// HostConfigResult is the plugin's own configuration file
+// (<config>/<short name>.yaml), parsed by the host. Found is false when
+// the file does not exist.
+type HostConfigResult struct {
+	Found  bool            `json:"found"`
+	Path   string          `json:"path"`
+	Config json.RawMessage `json:"config,omitempty"`
 }

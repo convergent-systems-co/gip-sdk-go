@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -62,5 +63,24 @@ func TestManifestValidation(t *testing.T) {
 		if _, err := ParseManifest([]byte(m)); err == nil {
 			t.Errorf("%s: should be rejected", name)
 		}
+	}
+}
+
+func TestExecutorManifest(t *testing.T) {
+	base := `{"schema":"gip.plugin-manifest/v1","name":"gip-plugin-executor","version":"0.1.0","protocol_versions":[1],"executable":"x",
+	"capabilities":["execute.work"],"permissions":["work.read","work.execute","config.read","telemetry.emit"],
+	"commands":[{"name":"execute","summary":"s","subcommands":[{"name":"next","summary":"s","permissions":["work.read","work.execute"],"timeout_seconds":%d}]}]}`
+	if _, err := ParseManifest([]byte(fmt.Sprintf(base, 3600))); err != nil {
+		t.Fatalf("executor manifest: %v", err)
+	}
+	for _, bad := range []int{-1, MaxCommandTimeoutSeconds + 1} {
+		if _, err := ParseManifest([]byte(fmt.Sprintf(base, bad))); err == nil {
+			t.Errorf("timeout %d must be refused", bad)
+		}
+	}
+	group := `{"schema":"gip.plugin-manifest/v1","name":"gip-plugin-x","version":"0.1.0","protocol_versions":[1],"executable":"x",
+	"commands":[{"name":"g","summary":"s","timeout_seconds":5,"subcommands":[{"name":"a","summary":"s"}]}]}`
+	if _, err := ParseManifest([]byte(group)); err == nil {
+		t.Error("a group cannot declare a timeout")
 	}
 }
