@@ -134,6 +134,28 @@ func (r *Request) Check(ctx context.Context, p protocol.HostCheckParams) (*proto
 	return &out, nil
 }
 
+// Progress reports progress on a unit the executor holds (SDK v0.3.0).
+// Requires work.execute. A report the host does not record (the unit is
+// not held under this lease) is a result with Recorded false, not an
+// error.
+func (r *Request) Progress(ctx context.Context, p protocol.HostProgressParams) (*protocol.HostProgressResult, error) {
+	var out protocol.HostProgressResult
+	if err := r.session.call(ctx, protocol.MethodHostProgress, p, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Execution reads the lease and latest progress of one unit, or of every
+// unit in progress when work is empty (SDK v0.3.0). Requires work.read.
+func (r *Request) Execution(ctx context.Context, work string) (*protocol.HostExecutionResult, error) {
+	var out protocol.HostExecutionResult
+	if err := r.session.call(ctx, protocol.MethodHostExecution, protocol.HostExecutionParams{Work: work}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Config asks the host for this plugin's configuration file, parsed, and
 // decodes it into out. It reports false when there is none. Requires
 // config.read.
