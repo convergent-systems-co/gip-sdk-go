@@ -234,7 +234,41 @@ type PlanDocument struct {
 	Findings    []PlanFinding  `json:"findings"`
 	Unplanned   []string       `json:"unplanned"`
 	Nodes       []PlanNode     `json:"nodes"`
-	Digest      string         `json:"digest"`
+	// Design (SDK v0.7.0) is the plan's current design document, absent
+	// until a pass sets one.
+	Design *PlanDesign `json:"design,omitempty"`
+	// Delivery (SDK v0.7.0) is present once the final discovery ran for
+	// the current intent revision: it fires once per revision, and the
+	// open findings it lists wait for the human at delivery.
+	Delivery *PlanDelivery `json:"delivery,omitempty"`
+	Digest   string        `json:"digest"`
+}
+
+// MaxDesignBytes bounds a plan design document (SDK v0.7.0): 64 KiB of
+// UTF-8 markdown.
+const MaxDesignBytes = 64 << 10
+
+// PlanDesign is the plan's versioned design document (SDK v0.7.0; gip
+// ADR-0021 amendment "front-loaded planning"): markdown describing the
+// shared architecture, the modules, and the exact interface contracts
+// (routes, request and response JSON shapes) consistent with the goals'
+// outcome checks. Builders and reviewers build to it. Revision counts
+// from 1; Pass is the planning pass that set it; Digest is the sha256 of
+// Content ("sha256:<hex>"). Superseded revisions stay in gip's ledger.
+type PlanDesign struct {
+	Revision int          `json:"revision"`
+	Pass     int          `json:"pass"`
+	Digest   string       `json:"digest"`
+	Content  string       `json:"content"`
+	Planners []PlanSource `json:"planners,omitempty"`
+}
+
+// PlanDelivery records that the final discovery ran for the current
+// intent revision (SDK v0.7.0). Findings are the open findings left for
+// the human at delivery: no further final discovery schedules them.
+type PlanDelivery struct {
+	Pass     int      `json:"pass"`
+	Findings []string `json:"findings"`
 }
 
 // Node returns the node at address a.
@@ -289,6 +323,12 @@ type PlanPass struct {
 	// Planners are the independent planner runs this pass reconciles.
 	// Initial and final passes with fewer than two are flagged single-model.
 	Planners []PlanSource `json:"planners,omitempty"`
+	// Design (SDK v0.7.0) sets or replaces the plan's design document
+	// (markdown, at most MaxDesignBytes of UTF-8). Only initial,
+	// milestone, early-milestone and final passes may set it; empty
+	// leaves the current design unchanged. A gip that predates the field
+	// refuses a pass that names it.
+	Design string `json:"design,omitempty"`
 }
 
 // PlanBinding names an existing goal or work unit (or, for the root, the
