@@ -83,8 +83,16 @@ const (
 
 // HostPlanParams asks for the plan document. IfDigest: the digest of the
 // document the caller holds.
+//
+// IdleSlots is an executor's report of the slots it could not fill: nil
+// reports nothing (a planner, or a reader), a positive count reports
+// idle slots, and 0 withdraws an earlier report. While a report stands,
+// gip lists idle planning as due on branches with nothing in flight
+// (TriggerIdle), so a planner can discover work for those slots. A gip
+// that predates the field ignores it.
 type HostPlanParams struct {
-	IfDigest string `json:"if_digest,omitempty"`
+	IfDigest  string `json:"if_digest,omitempty"`
+	IdleSlots *int   `json:"idle_slots,omitempty"`
 }
 
 // HostPlanResult carries the plan document, or Unchanged when it still

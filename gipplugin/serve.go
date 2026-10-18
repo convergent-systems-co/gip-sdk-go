@@ -167,6 +167,20 @@ func (r *Request) Plan(ctx context.Context, ifDigest string) (*protocol.HostPlan
 	return &out, nil
 }
 
+// PlanReport reads the plan document like Plan and reports the
+// executor's idle slots with it (HostPlanParams.IdleSlots): a positive
+// count reports idle slots, 0 withdraws the report. Requires work.read.
+func (r *Request) PlanReport(ctx context.Context, ifDigest string, idleSlots int) (*protocol.HostPlanResult, error) {
+	var out protocol.HostPlanResult
+	if idleSlots < 0 {
+		idleSlots = 0
+	}
+	if err := r.session.call(ctx, protocol.MethodHostPlan, protocol.HostPlanParams{IfDigest: ifDigest, IdleSlots: &idleSlots}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Finding records discovered work against a plan node (SDK v0.4.0). A
 // refusal is a disposition, not an error. Requires work.execute.
 func (r *Request) Finding(ctx context.Context, p protocol.HostFindingParams) (*protocol.HostFindingResult, error) {

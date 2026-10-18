@@ -32,6 +32,15 @@ func TestPlanMessages(t *testing.T) {
 	if string(b) != "{}" {
 		t.Fatalf("an empty plan request is {}: %s", b)
 	}
+	zero, three := 0, 3
+	for _, c := range []struct {
+		p    HostPlanParams
+		want string
+	}{{HostPlanParams{IdleSlots: &zero}, `{"idle_slots":0}`}, {HostPlanParams{IfDigest: "d", IdleSlots: &three}, `{"if_digest":"d","idle_slots":3}`}} {
+		if b, _ := json.Marshal(c.p); string(b) != c.want {
+			t.Fatalf("an idle report is explicit, 0 included: %s, want %s", b, c.want)
+		}
+	}
 	b, _ = json.Marshal(HostPlanResult{Unchanged: true, Digest: "sha256:x", StateHead: 7})
 	if strings.Contains(string(b), `"plan"`) {
 		t.Fatalf("an unchanged result carries no document: %s", b)
