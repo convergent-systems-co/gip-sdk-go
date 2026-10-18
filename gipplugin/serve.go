@@ -156,6 +156,51 @@ func (r *Request) Execution(ctx context.Context, work string) (*protocol.HostExe
 	return &out, nil
 }
 
+// Plan reads gip's plan document (SDK v0.4.0, ADR-0021). With the digest
+// of the document the caller holds, an unchanged plan comes back as
+// Unchanged without the document. Requires work.read.
+func (r *Request) Plan(ctx context.Context, ifDigest string) (*protocol.HostPlanResult, error) {
+	var out protocol.HostPlanResult
+	if err := r.session.call(ctx, protocol.MethodHostPlan, protocol.HostPlanParams{IfDigest: ifDigest}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PlanReport reads the plan document like Plan and reports the
+// executor's idle slots with it (HostPlanParams.IdleSlots): a positive
+// count reports idle slots, 0 withdraws the report. Requires work.read.
+func (r *Request) PlanReport(ctx context.Context, ifDigest string, idleSlots int) (*protocol.HostPlanResult, error) {
+	var out protocol.HostPlanResult
+	if idleSlots < 0 {
+		idleSlots = 0
+	}
+	if err := r.session.call(ctx, protocol.MethodHostPlan, protocol.HostPlanParams{IfDigest: ifDigest, IdleSlots: &idleSlots}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Finding records discovered work against a plan node (SDK v0.4.0). A
+// refusal is a disposition, not an error. Requires work.execute.
+func (r *Request) Finding(ctx context.Context, p protocol.HostFindingParams) (*protocol.HostFindingResult, error) {
+	var out protocol.HostFindingResult
+	if err := r.session.call(ctx, protocol.MethodHostFinding, p, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PlanPass submits one planning pass (SDK v0.4.0). A refusal is a
+// disposition, not an error. Requires plan.write.
+func (r *Request) PlanPass(ctx context.Context, p protocol.HostPlanPassParams) (*protocol.HostPlanPassResult, error) {
+	var out protocol.HostPlanPassResult
+	if err := r.session.call(ctx, protocol.MethodHostPlanPass, p, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Config asks the host for this plugin's configuration file, parsed, and
 // decodes it into out. It reports false when there is none. Requires
 // config.read.

@@ -109,13 +109,16 @@ const (
 	CapProduceEvidence             = "produce.evidence"
 	CapExecuteWork                 = "execute.work"
 	CapVisualize                   = "visualize"
+	// CapPlanWork (SDK v0.4.0): the plugin plans the frontier through
+	// host/plan/pass (gip ADR-0021).
+	CapPlanWork = "plan.work"
 )
 
 // KnownCapabilities is the closed set accepted by protocol v1.
 var KnownCapabilities = []string{
 	CapProposeIntentInterpretation, CapProposeGoals, CapProposeInvariants,
 	CapProposeWork, CapProposeGraphRules, CapProduceEvidence, CapExecuteWork,
-	CapVisualize,
+	CapVisualize, CapPlanWork,
 }
 
 // ReservedCapabilityPrefixes name powers only the core holds. A manifest
@@ -137,12 +140,14 @@ const (
 	PermWorkRead    = "work.read"    // frontier and work contracts
 	PermWorkExecute = "work.execute" // act on work as a trusted agent principal; host-run checks
 	PermConfigRead  = "config.read"  // the plugin's own <config>/<name>.yaml
+	// PermPlanWrite (SDK v0.4.0) is declared in plan.go.
 )
 
 // KnownPermissions is the closed set accepted by protocol v1.
 var KnownPermissions = []string{
 	PermTelemetryEmit, PermStateRead, PermIntentRead, PermProposalsSubmit,
 	PermEvidenceSubmit, PermPluginData, PermWorkRead, PermWorkExecute, PermConfigRead,
+	PermPlanWrite,
 }
 
 // MaxCommandTimeoutSeconds bounds a command's declared timeout.

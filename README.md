@@ -52,6 +52,16 @@ A `start` grants the executor a time-limited **lease** on the unit (ADR-0015 in 
 | `host/progress` (`Progress`, `work.execute`) | Report a phase, a short message, an optional percent and the cost so far for a unit the executor holds. Progress is telemetry, never a governed transition. A report under a lost lease is not recorded and says why. |
 | `host/execution` (`Execution`, `work.read`) | Read the lease and latest progress of one unit, or of every unit in progress. |
 
+### Plan-once frontier (v0.4.0)
+
+gip plans the work once, up front, as a tree of stable addresses (A, B, B2, B2.1.1): the root, goals, sub-goals and, as every leaf, work units (WUs), with dependency edges that may cross branches. It keeps a **plan document** (`gip.plan-document/v1`) up to date incrementally (ADR-0021 in the gip repository). The plan never authorizes anything: every claim still goes through `Act`.
+
+| Method (`Request` helper) | Permission | Purpose |
+|---|---|---|
+| `host/plan` (`Plan`) | `work.read` | Read the plan document. Pass the digest you hold: an unchanged plan returns `Unchanged` without the document. `Ready` lists ready work leaves in the election order fixed at planning time. An executor reports slots it could not fill with `PlanReport` (`idle_slots`; 0 withdraws the report), and gip then lists `idle` planning as due on branches with nothing in flight. |
+| `host/finding` (`Finding`) | `work.execute` | Record discovered work against a node, as a trusted agent principal. A finding waits for its branch's milestone; a `blocking` one (only the unit's holder, or a principal granted `plan.find`) stops the unit and has gip plan from that node's goal down. |
+| `host/plan/pass` (`PlanPass`) | `plan.write` (new) | Submit one planning pass as a trusted agent principal (for example `agent:planner`): new nodes (binding goals and work, or creating and admitting them), edges, cancellations, finding resolutions. Its trigger and scope must be due (`Triggers`), except `background` and `idle` passes, which schedule no findings. gip assigns addresses. The pass is decided under the principal's own grants (`plan.pass` by name, `goal.admit`, `work.admit`, ...). |
+
 A command may declare `timeout_seconds`, up to 7200, when one invocation runs longer than the host's default.
 
 The full protocol specification is in the gip repository under `docs/spec/plugin-protocol.md`. A reference plugin is [gip-plugin-discovery](https://github.com/convergent-systems-co/gip-plugin-discovery).
