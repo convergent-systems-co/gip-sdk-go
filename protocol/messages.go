@@ -304,6 +304,22 @@ type HostContractResult struct {
 	Contract json.RawMessage `json:"contract"`
 }
 
+// Design returns the plan design the contract carries (SDK v0.7.0): the
+// document the unit is built and reviewed to. It is nil when the plan has
+// no design, or the gip predates it.
+func (r *HostContractResult) Design() (*PlanDesign, error) {
+	if len(r.Contract) == 0 {
+		return nil, nil
+	}
+	var c struct {
+		Design *PlanDesign `json:"design"`
+	}
+	if err := json.Unmarshal(r.Contract, &c); err != nil {
+		return nil, err
+	}
+	return c.Design, nil
+}
+
 // Act kinds an executor may request.
 const (
 	ActStart     = "start"

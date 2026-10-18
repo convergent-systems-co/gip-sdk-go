@@ -75,6 +75,19 @@ In dark factory mode an independent agent reviewer decides each unit's review (A
 - A ceremony that is not a review of `Work`, or does not exist, is refused before anything is submitted; one already decided is refused by the gateway (`ILLEGAL_TRANSITION`).
 - The decision is recorded as the agent's own, with no human attestation.
 
+### Front-loaded planning (v0.7.0)
+
+Most of the time goes into planning, so development is quick (ADR-0021 amendment in the gip repository). A plan carries a versioned **design** document: markdown describing the shared architecture, the modules and the exact interface contracts (routes, request and response JSON shapes) consistent with the goals' outcome checks. Builders and reviewers build to it.
+
+| Surface | Field | Purpose |
+|---|---|---|
+| `host/plan/pass` (`PlanPass`) | `Design` | Set or replace the design (UTF-8 markdown, at most `MaxDesignBytes`, 64 KiB). Only `initial`, `milestone`, `early-milestone` and `final` passes may; empty leaves it unchanged. gip records the revision with the pass number and the pass's planners, and keeps every superseded revision. |
+| `host/plan` (`PlanDocument`) | `Design` | The current design (`PlanDesign`: `revision`, `pass`, `digest`, `content`, `planners`); absent until a pass sets one. |
+| `host/plan` (`PlanDocument`) | `Delivery` | Present once the final discovery ran for the current intent revision (`PlanDelivery`: its `pass` and the open `findings` left for the human at delivery). The final discovery fires once per intent revision: completing the work it scheduled does not make it due again. |
+| `host/contract` (`HostContractResult`) | `Design()` | The design the work contract carries (`design`, same shape), or nil. |
+
+All of it is additive: a gip that predates it never sends the new fields, and refuses a pass that names `design` (`INVALID_PAYLOAD`).
+
 A command may declare `timeout_seconds`, up to 7200, when one invocation runs longer than the host's default.
 
 The full protocol specification is in the gip repository under `docs/spec/plugin-protocol.md`. A reference plugin is [gip-plugin-discovery](https://github.com/convergent-systems-co/gip-plugin-discovery).
