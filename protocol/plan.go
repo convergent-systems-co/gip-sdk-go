@@ -79,6 +79,8 @@ const (
 	FindingOpen      = "open"
 	FindingScheduled = "scheduled"
 	FindingDismissed = "dismissed"
+	// FindingDecided (SDK v0.5.0): an owner decision a human has decided.
+	FindingDecided = "decided"
 )
 
 // HostPlanParams asks for the plan document. IfDigest: the digest of the
@@ -186,11 +188,15 @@ type Milestone struct {
 
 // PlanFinding is discovered work recorded against a node.
 type PlanFinding struct {
-	ID       string   `json:"id"`
-	Node     string   `json:"node"`
-	Branch   string   `json:"branch,omitempty"`
-	Title    string   `json:"title"`
-	Blocking bool     `json:"blocking"`
+	ID       string `json:"id"`
+	Node     string `json:"node"`
+	Branch   string `json:"branch,omitempty"`
+	Title    string `json:"title"`
+	Blocking bool   `json:"blocking"`
+	// Decision (SDK v0.5.0): the finding is an open owner decision, not
+	// work. No planning pass schedules, counts or dismisses it; it waits
+	// for a human (gip plan decide).
+	Decision bool     `json:"decision,omitempty"`
 	Status   string   `json:"status"`
 	Pass     int      `json:"pass,omitempty"`
 	Nodes    []string `json:"nodes,omitempty"`
@@ -244,7 +250,9 @@ func (d *PlanDocument) Node(a string) (*PlanNode, bool) {
 // HostFindingParams records a finding against a node (an address) or the
 // live node of a work unit, as principal As. A blocking finding stops the
 // unit: only its current holder (or a principal granted plan.find) may
-// record one, and gip then plans from that node's goal down.
+// record one, and gip then plans from that node's goal down. A Decision
+// finding (SDK v0.5.0) is an open owner decision rather than work: gip
+// routes it to a human and never plans it as work.
 type HostFindingParams struct {
 	Work      string `json:"work,omitempty"`
 	Node      string `json:"node,omitempty"`
@@ -252,6 +260,7 @@ type HostFindingParams struct {
 	Title     string `json:"title"`
 	Detail    string `json:"detail,omitempty"`
 	Blocking  bool   `json:"blocking,omitempty"`
+	Decision  bool   `json:"decision,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
 }
 
