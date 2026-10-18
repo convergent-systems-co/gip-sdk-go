@@ -67,7 +67,16 @@ func TestPlanMessages(t *testing.T) {
 		}
 	}
 	b, _ = json.Marshal(HostFindingParams{Work: "w", As: "agent:x", Title: "t"})
-	if strings.Contains(string(b), "blocking") || strings.Contains(string(b), "node") {
+	if strings.Contains(string(b), "blocking") || strings.Contains(string(b), "node") || strings.Contains(string(b), "decision") {
 		t.Fatalf("unused finding fields are omitted: %s", b)
+	}
+	// v0.5.0: an owner-decision finding.
+	b, _ = json.Marshal(HostFindingParams{Work: "w", As: "agent:x", Title: "t", Decision: true})
+	if !strings.Contains(string(b), `"decision":true`) {
+		t.Fatalf("a decision finding says so: %s", b)
+	}
+	var f PlanFinding
+	if err := json.Unmarshal([]byte(`{"id":"f","node":"B1","title":"t","blocking":false,"decision":true,"status":"decided"}`), &f); err != nil || !f.Decision || f.Status != FindingDecided {
+		t.Fatalf("decoded %+v (%v)", f, err)
 	}
 }
