@@ -140,6 +140,11 @@ const (
 	PermWorkRead    = "work.read"    // frontier and work contracts
 	PermWorkExecute = "work.execute" // act on work as a trusted agent principal; host-run checks
 	PermConfigRead  = "config.read"  // the plugin's own <config>/<name>.yaml
+	// PermWorkReview (SDK v0.6.0) grants host/act kind review only: decide
+	// an open review ceremony as a trusted agent principal. It is separate
+	// from work.execute so that reviewing is granted on its own (least
+	// privilege), and so an executor is not a reviewer unless trusted as one.
+	PermWorkReview = "work.review"
 	// PermPlanWrite (SDK v0.4.0) is declared in plan.go.
 )
 
@@ -147,7 +152,7 @@ const (
 var KnownPermissions = []string{
 	PermTelemetryEmit, PermStateRead, PermIntentRead, PermProposalsSubmit,
 	PermEvidenceSubmit, PermPluginData, PermWorkRead, PermWorkExecute, PermConfigRead,
-	PermPlanWrite,
+	PermPlanWrite, PermWorkReview,
 }
 
 // MaxCommandTimeoutSeconds bounds a command's declared timeout.

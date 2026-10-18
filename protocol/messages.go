@@ -328,6 +328,22 @@ const (
 	// held by a human needs a human (HUMAN_REQUIRED). Rationale is the
 	// reason: plain text, one line.
 	ActReclaim = "reclaim"
+	// ActReview decides an open review ceremony on Work (SDK v0.6.0).
+	// Ceremony names the review ceremony (the one a submit opened, in
+	// HostActResult.Ceremony), Outcome is ReviewApprove or ReviewReject,
+	// and Rationale (required) says why. It needs the work.review plugin
+	// permission (not work.execute) and, in the project, a work.review
+	// grant for the acting principal. The executor of the unit can never
+	// review it (CONFLICT_OF_INTEREST), and a plugin can never claim the
+	// solo self-review waiver. A rejection returns the unit to its
+	// executor for rework.
+	ActReview = "review"
+)
+
+// Review outcomes (ActReview).
+const (
+	ReviewApprove = "approve"
+	ReviewReject  = "reject"
 )
 
 // Lease states.
@@ -388,6 +404,14 @@ type HostActParams struct {
 	// rotation or a reclaim, every renew and submit must name the lease
 	// (LEASE_REQUIRED).
 	RotateLease bool `json:"rotate_lease,omitempty"`
+	// Ceremony, on review, is the open review ceremony of Work being
+	// decided (SDK v0.6.0).
+	Ceremony string `json:"ceremony,omitempty"`
+	// Outcome, on review, is ReviewApprove or ReviewReject.
+	Outcome string `json:"outcome,omitempty"`
+	// Evidence, on review, optionally names evidence records the
+	// decision relies on.
+	Evidence []string `json:"evidence,omitempty"`
 }
 
 // HostActResult is the gateway's disposition.

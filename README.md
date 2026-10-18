@@ -32,7 +32,7 @@ An executor carries work units through the GIP process: it reads the frontier an
 | `work.execute` | `host/act` (`Act`: start, submit, qualify, integrate, or rework to resolve a merge conflict), `host/check` (`Check`: the host runs a predicate's defined check and records what it observed) |
 | `config.read` | `host/config` (`Config`): the plugin's own `<config>/<short name>.yaml`, parsed by the host |
 
-An executor never acts as itself. `Act` and `Check` name an agent principal, which must be one the human listed with `gip plugin trust --act-as`, bound in the project and holding the grants for the transition. A refusal is a disposition, not an error. Reviews and acceptance stay with humans.
+An executor never acts as itself. `Act` and `Check` name an agent principal, which must be one listed with `gip plugin trust --act-as`, bound in the project and holding the grants for the transition. A refusal is a disposition, not an error. Reviews are decided by an independent agent principal through the review act (v0.6.0, below).
 
 The same interface serves a local CLI executor (Claude, Codex, Copilot) and a remote one such as a Conduit adapter with pools:
 
@@ -61,6 +61,19 @@ gip plans the work once, up front, as a tree of stable addresses (A, B, B2, B2.1
 | `host/plan` (`Plan`) | `work.read` | Read the plan document. Pass the digest you hold: an unchanged plan returns `Unchanged` without the document. `Ready` lists ready work leaves in the election order fixed at planning time. An executor reports slots it could not fill with `PlanReport` (`idle_slots`; 0 withdraws the report), and gip then lists `idle` planning as due on branches with nothing in flight. |
 | `host/finding` (`Finding`) | `work.execute` | Record discovered work against a node, as a trusted agent principal. A finding waits for its branch's milestone; a `blocking` one (only the unit's holder, or a principal granted `plan.find`) stops the unit and has gip plan from that node's goal down. A `decision` finding (v0.5.0) is an open owner decision, not work: gip never plans, counts or dismisses it in a pass; it waits for a human (`gip plan decide`), and then has status `decided`. |
 | `host/plan/pass` (`PlanPass`) | `plan.write` (new) | Submit one planning pass as a trusted agent principal (for example `agent:planner`): new nodes (binding goals and work, or creating and admitting them), edges, cancellations, finding resolutions. Its trigger and scope must be due (`Triggers`), except `background` and `idle` passes, which schedule no findings. gip assigns addresses. The pass is decided under the principal's own grants (`plan.pass` by name, `goal.admit`, `work.admit`, ...). |
+
+### Agent review (v0.6.0)
+
+In dark factory mode an independent agent reviewer decides each unit's review (ADR-0012 in the gip repository). A `submit` of work that needs review opens a review ceremony (`HostActResult.Ceremony`); a reviewer plugin decides it with the review act:
+
+| Act | Permission | Purpose |
+|---|---|---|
+| `Act` kind `review` (`ActReview`) | `work.review` (new) | Decide the open review ceremony `Ceremony` of work unit `Work` as a trusted agent principal: `Outcome` is `approve` or `reject` (`ReviewApprove`, `ReviewReject`), `Rationale` is required, and `Evidence` optionally names evidence records the decision relies on. A rejection returns the unit to its executor for rework. |
+
+- `work.review` is its own permission, granted at trust time; `work.execute` does not include it, and `work.review` grants no other act. A plugin granted `work.review` may be trusted `--act-as` agent principals.
+- The acting principal needs a `work.review` grant in the project. The unit's executor can never review its own work (`CONFLICT_OF_INTEREST`), and a plugin can never claim the solo self-review waiver.
+- A ceremony that is not a review of `Work`, or does not exist, is refused before anything is submitted; one already decided is refused by the gateway (`ILLEGAL_TRANSITION`).
+- The decision is recorded as the agent's own, with no human attestation.
 
 A command may declare `timeout_seconds`, up to 7200, when one invocation runs longer than the host's default.
 
