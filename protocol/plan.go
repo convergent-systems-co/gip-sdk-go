@@ -72,6 +72,15 @@ const (
 	TriggerAdopt      = "adopt"
 	TriggerBackground = "background"
 	TriggerIdle       = "idle"
+	// TriggerRescope (SDK v0.9.0, gip ADR-0024 §8): a rescope or split
+	// finding made a re-scope of one unit due at once, scoped to the
+	// unit's parent. The pass may supersede that unit (Replaces) even
+	// though its work has started.
+	TriggerRescope = "rescope"
+	// TriggerRefine (SDK v0.9.0, gip ADR-0024 §6): an open question has
+	// no pending intent proposal covering it; the planner answers it with
+	// host/intent/propose, not with a pass.
+	TriggerRefine = "refine"
 )
 
 // Finding statuses.
@@ -135,6 +144,16 @@ type PlanWork struct {
 	// Absent for a unit not started, or started before the plan had a
 	// design.
 	Design *DesignPin `json:"design,omitempty"`
+	// CompletedSeq and CompletedPass (SDK v0.9.0, gip PLAN-036): for a
+	// complete unit, the ledger seq of the event that completed it (its
+	// qualification, or its integration when it was qualified at a
+	// commit) and the latest planning pass at that seq. A planner compares
+	// them with a finding's RecordedSeq to tell work discovered after the
+	// unit was done from work the unit was asked to do. After a ledger
+	// merge seq orders events along one line of history only. Absent while
+	// the unit is not complete.
+	CompletedSeq  int64 `json:"completed_seq,omitempty"`
+	CompletedPass int   `json:"completed_pass,omitempty"`
 }
 
 // DesignPin identifies one revision of the plan's design by its number
@@ -172,6 +191,11 @@ type PlanNode struct {
 	Sources    []PlanSource `json:"sources,omitempty"`
 	Confidence string       `json:"confidence,omitempty"`
 	Work       *PlanWork    `json:"work,omitempty"`
+	// Rescopes (SDK v0.9.0, gip ADR-0024 §8) counts the re-scopes and
+	// splits of the node's unit lineage: a replacement counts those of the
+	// units it replaces. One is allowed; a rescope or split finding on a
+	// lineage already re-scoped becomes a blocking question instead.
+	Rescopes int `json:"rescopes,omitempty"`
 }
 
 // PlanSource is one planner run (and its model) that produced a node.
@@ -208,11 +232,35 @@ type PlanFinding struct {
 	Blocking bool   `json:"blocking"`
 	// Decision (SDK v0.5.0): the finding is an open owner decision, not
 	// work. No planning pass schedules, counts or dismisses it; it waits
-	// for a human (gip plan decide).
+	// for a human (gip plan decide). Rules 1 only: under rules 2 a
+	// decision is recorded as a question (gip ADR-0024 §6).
 	Decision bool     `json:"decision,omitempty"`
 	Status   string   `json:"status"`
 	Pass     int      `json:"pass,omitempty"`
 	Nodes    []string `json:"nodes,omitempty"`
+	// Kind (SDK v0.9.0, gip ADR-0024 D7): FindingKindWork (absent),
+	// FindingKindDecision, FindingKindRescope or FindingKindSplit. Read it
+	// with EffectiveKind, which also honours the older Decision flag.
+	Kind string `json:"kind,omitempty"`
+	// RecordedSeq and RecordedPass (SDK v0.9.0, gip PLAN-036): the ledger
+	// seq of the plan.find that recorded the finding and the latest
+	// planning pass at that seq. Compare with PlanWork.CompletedSeq for
+	// stale-finding triage.
+	RecordedSeq  int64 `json:"recorded_seq,omitempty"`
+	RecordedPass int   `json:"recorded_pass,omitempty"`
+}
+
+// EffectiveKind returns the finding's kind: Kind when set, otherwise
+// FindingKindDecision for a finding with the Decision flag (records made
+// before kinds), otherwise FindingKindWork.
+func (f *PlanFinding) EffectiveKind() string {
+	switch {
+	case f.Kind != "":
+		return f.Kind
+	case f.Decision:
+		return FindingKindDecision
+	}
+	return FindingKindWork
 }
 
 // Trigger is planning that is due: Kind is a pass trigger, Scope the
@@ -254,7 +302,21 @@ type PlanDocument struct {
 	// the current intent revision: it fires once per revision, and the
 	// open findings it lists wait for the human at delivery.
 	Delivery *PlanDelivery `json:"delivery,omitempty"`
-	Digest   string        `json:"digest"`
+	// Autonomous (SDK v0.9.0, gip ADR-0024 D5) is the project's setting:
+	// true holds questions until the project is quiescent, false asks
+	// them once the planner's refine pass ran. Absent from a gip that
+	// predates it; absent in the project record means true.
+	Autonomous *bool `json:"autonomous,omitempty"`
+	// Intents (SDK v0.9.0) are the project's current intent revisions,
+	// content included: the intent the planner recalls in every planning
+	// prompt (gip ADR-0024 D4).
+	Intents []PlanIntent `json:"intents,omitempty"`
+	// Questions (SDK v0.9.0) are the open questions (gip ADR-0024 §6).
+	Questions []PlanQuestion `json:"questions,omitempty"`
+	// HumanDue (SDK v0.9.0) says whether the person is due to be asked.
+	// Executors stop electing while it is due, and report it.
+	HumanDue *HumanDue `json:"human_due,omitempty"`
+	Digest   string    `json:"digest"`
 }
 
 // MaxDesignBytes bounds a plan design document (SDK v0.7.0): 64 KiB of
@@ -279,9 +341,13 @@ type PlanDesign struct {
 // PlanDelivery records that the final discovery ran for the current
 // intent revision (SDK v0.7.0). Findings are the open findings left for
 // the human at delivery: no further final discovery schedules them.
+// Record (SDK v0.9.0, gip ADR-0024 §7) is the delivery record for the
+// current intent revisions once a reviewer prepared it: its goals,
+// checks, held questions and status.
 type PlanDelivery struct {
-	Pass     int      `json:"pass"`
-	Findings []string `json:"findings"`
+	Pass     int             `json:"pass"`
+	Findings []string        `json:"findings"`
+	Record   *DeliveryRecord `json:"record,omitempty"`
 }
 
 // Node returns the node at address a.
@@ -300,6 +366,17 @@ func (d *PlanDocument) Node(a string) (*PlanNode, bool) {
 // record one, and gip then plans from that node's goal down. A Decision
 // finding (SDK v0.5.0) is an open owner decision rather than work: gip
 // routes it to a human and never plans it as work.
+//
+// Kind (SDK v0.9.0, gip ADR-0024 D7) types the finding: FindingKindWork
+// (the default when absent), FindingKindDecision (the same as Decision;
+// under rules 2 gip records a question at the node instead of a
+// finding, and the result names it), FindingKindRescope or
+// FindingKindSplit. A rescope or split finding names a work unit and is
+// recorded by a builder of the unit, by its reviewer (a current
+// work.review grant covering it) or by a principal granted plan.find;
+// rescope also needs the unit's review rejections (ContractReview) to
+// have reached the cap. Either makes a rescope pass due at once. A gip
+// that predates kinds refuses a finding that names one.
 type HostFindingParams struct {
 	Work      string `json:"work,omitempty"`
 	Node      string `json:"node,omitempty"`
@@ -308,15 +385,20 @@ type HostFindingParams struct {
 	Detail    string `json:"detail,omitempty"`
 	Blocking  bool   `json:"blocking,omitempty"`
 	Decision  bool   `json:"decision,omitempty"`
+	Kind      string `json:"kind,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
 }
 
 // HostFindingResult is the gateway's disposition and the finding's id.
+// Question (SDK v0.9.0) is the question gip recorded instead of a finding:
+// a decision under rules 2, or a rescope or split on a lineage already
+// re-scoped once (gip ADR-0024 §8).
 type HostFindingResult struct {
 	Disposition string   `json:"disposition"`
 	Code        string   `json:"code,omitempty"`
 	Reasons     []string `json:"reasons"`
 	Finding     string   `json:"finding,omitempty"`
+	Question    string   `json:"question,omitempty"`
 	EventSeq    int64    `json:"event_seq"`
 }
 
@@ -340,8 +422,16 @@ type PlanPass struct {
 	// (markdown, at most MaxDesignBytes of UTF-8). Only initial,
 	// milestone, early-milestone and final passes may set it; empty
 	// leaves the current design unchanged. A gip that predates the field
-	// refuses a pass that names it.
+	// refuses a pass that names it. Under rules 2 a design set by an
+	// initial or final pass must hold exactly one RuntimeBlock (SDK
+	// v0.9.0, gip ADR-0024 §7).
 	Design string `json:"design,omitempty"`
+	// Questions (SDK v0.9.0, gip ADR-0024 D4) are raised by the pass, in
+	// the same event: each becomes an intent ambiguity carrying the
+	// question shape. A dismissal on scope grounds must name one of them
+	// by Ref (FindingResolution.Question). A gip that predates the field
+	// refuses a pass that names it.
+	Questions []PlanQuestion `json:"questions,omitempty"`
 }
 
 // PlanBinding names an existing goal or work unit (or, for the root, the
@@ -355,16 +445,26 @@ type PlanBinding struct {
 // and DependsOn are addresses or the Ref of an earlier node in the pass;
 // gip assigns the address (the next number never used under the parent).
 type PlanNodeFields struct {
-	Ref        string        `json:"ref,omitempty"`
-	Parent     string        `json:"parent"`
-	Label      string        `json:"label,omitempty"`
-	Bind       *PlanBinding  `json:"bind,omitempty"`
-	Goal       *PlanGoal     `json:"goal,omitempty"`
-	Work       *PlanWorkUnit `json:"work,omitempty"`
-	DependsOn  []string      `json:"depends_on,omitempty"`
-	Replaces   string        `json:"replaces,omitempty"`
-	Sources    []PlanSource  `json:"sources,omitempty"`
-	Confidence string        `json:"confidence,omitempty"`
+	Ref       string        `json:"ref,omitempty"`
+	Parent    string        `json:"parent"`
+	Label     string        `json:"label,omitempty"`
+	Bind      *PlanBinding  `json:"bind,omitempty"`
+	Goal      *PlanGoal     `json:"goal,omitempty"`
+	Work      *PlanWorkUnit `json:"work,omitempty"`
+	DependsOn []string      `json:"depends_on,omitempty"`
+	// Replaces supersedes a node: an address planned by an earlier pass,
+	// or (gip PLAN-025, same-pass supersession) the Ref or address of a
+	// node an earlier entry of this same pass added with Bind. A planner
+	// can bind coarse work and replace it in the same pass with Work nodes
+	// carrying refined objectives; gip records the bound node as added
+	// and superseded and withdraws the bound object. A node the same pass
+	// created (Goal or Work) cannot be superseded in it. Superseding needs
+	// work.withdraw (goal.withdraw for goal nodes) under the planner's
+	// grants. In a rescope pass (TriggerRescope) it may name the one unit
+	// the rescope finding names even though its work has started.
+	Replaces   string       `json:"replaces,omitempty"`
+	Sources    []PlanSource `json:"sources,omitempty"`
+	Confidence string       `json:"confidence,omitempty"`
 }
 
 // PlanGoal creates and admits a sub-goal (under the planner's goal.admit).
@@ -398,11 +498,25 @@ type PlanRetire struct {
 
 // FindingResolution schedules a finding as nodes of this pass, or
 // dismisses it with a reason.
+//
+// Grounds and Question (SDK v0.9.0, gip ADR-0024 D4) qualify a dismissal:
+// Grounds GroundsScope (the finding is outside the intent) must name, in
+// Question, the Ref of a question raised in this same pass, so the
+// dismissal and its question are one event (QUESTION_REQUIRED).
 type FindingResolution struct {
-	Finding string   `json:"finding"`
-	Nodes   []string `json:"nodes,omitempty"`
-	Dismiss string   `json:"dismiss,omitempty"`
+	Finding  string   `json:"finding"`
+	Nodes    []string `json:"nodes,omitempty"`
+	Dismiss  string   `json:"dismiss,omitempty"`
+	Grounds  string   `json:"grounds,omitempty"`
+	Question string   `json:"question,omitempty"`
 }
+
+// Dismissal grounds (SDK v0.9.0).
+const (
+	// GroundsScope: the finding is out of the intent's scope; the pass
+	// raises the question whether to extend it.
+	GroundsScope = "scope"
+)
 
 // HostPlanPassParams submits a pass as principal As.
 type HostPlanPassParams struct {
@@ -425,4 +539,13 @@ type HostPlanPassResult struct {
 	Added       []string          `json:"added,omitempty"`
 	Refs        map[string]string `json:"refs,omitempty"`
 	Created     []string          `json:"created,omitempty"`
+	// Omitted (SDK v0.9.0, gip ADR-0024 §4) lists the payload refs gip
+	// left out: goals the intent does not contain, their subtrees and
+	// every node of the pass depending on them. A class goal question is
+	// raised for each such goal; the rest of the pass is applied.
+	Omitted []string `json:"omitted,omitempty"`
+	// Questions (SDK v0.9.0) maps each question ref of the pass (and each
+	// goal question gip raised for an omitted goal, by the goal's ref) to
+	// the id of the question recorded.
+	Questions map[string]string `json:"questions,omitempty"`
 }

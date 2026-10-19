@@ -324,6 +324,44 @@ func (r *HostContractResult) Design() (*ContractDesign, error) {
 	return c.Design, nil
 }
 
+// Review returns the review state the contract carries (SDK v0.9.0, gip
+// ADR-0024 §8): the unit's rejected reviews computed from the ledger,
+// the project's cap, and the lineage's re-scopes. Executors read it
+// instead of keeping a counter. It is nil when the contract has none
+// (a gip that predates it).
+func (r *HostContractResult) Review() (*ContractReview, error) {
+	if len(r.Contract) == 0 {
+		return nil, nil
+	}
+	var c struct {
+		Review *ContractReview `json:"review"`
+	}
+	if err := json.Unmarshal(r.Contract, &c); err != nil {
+		return nil, err
+	}
+	return c.Review, nil
+}
+
+// ContractReview is the work contract's review block (SDK v0.9.0).
+// Rejections counts the rejected review ceremonies of the unit's current
+// lineage since its last start; RejectionCap is the project's
+// review_rejection_cap (default 3): once Rejections reaches it, a
+// builder or the reviewer may record a FindingKindRescope finding.
+// Rescopes counts the lineage's re-scopes and splits: one is allowed.
+type ContractReview struct {
+	Rejections   int `json:"rejections"`
+	RejectionCap int `json:"rejection_cap"`
+	Rescopes     int `json:"rescopes"`
+}
+
+// AtCap reports whether the unit's rejections reached the cap, so a
+// rescope finding may be recorded. When the lineage was already
+// re-scoped (Rescopes > 0) gip records such a finding as a blocking
+// question instead. It is false for a nil review or a zero cap.
+func (c *ContractReview) AtCap() bool {
+	return c != nil && c.RejectionCap > 0 && c.Rejections >= c.RejectionCap
+}
+
 // ContractDesign is the design revision a work contract serves (SDK
 // v0.8.0). Pinned says the revision is the one the unit was started on
 // (work.start pins it; rework keeps the pin); CurrentRevision and
@@ -388,7 +426,25 @@ const (
 	// solo self-review waiver. A rejection returns the unit to its
 	// executor for rework.
 	ActReview = "review"
+	// ActGoalQualify and ActGoalAccept (SDK v0.9.0, gip ADR-0024 D3, §7)
+	// qualify and accept the goal named in Goal (Work stays empty), as the
+	// reviewer: Rationale says why, Evidence optionally names the goal
+	// evidence relied on. They need the work.review plugin permission
+	// and, in the project, the acting principal's goal.qualify or
+	// goal.accept grant. A principal that started or reworked any unit in
+	// the goal's subtree, or created or admitted the goal or anything in
+	// it, is refused (CONFLICT_OF_INTEREST): the reviewer acts, not the
+	// builder or the planner. Under rules 2 a qualified, unaccepted root
+	// goal is ready with next action goal.accept (ReasonAcceptanceDue). A
+	// gip that predates them refuses the kinds.
+	ActGoalQualify = "goal.qualify"
+	ActGoalAccept  = "goal.accept"
 )
+
+// ReasonAcceptanceDue (SDK v0.9.0) is the frontier reason code of a
+// qualified, unaccepted root goal under rules 2: ready, next action
+// goal.accept, no longer human-required.
+const ReasonAcceptanceDue = "ACCEPTANCE_DUE"
 
 // Review outcomes (ActReview).
 const (
@@ -460,8 +516,11 @@ type HostActParams struct {
 	// Outcome, on review, is ReviewApprove or ReviewReject.
 	Outcome string `json:"outcome,omitempty"`
 	// Evidence, on review, optionally names evidence records the
-	// decision relies on.
+	// decision relies on (and on goal.qualify and goal.accept, the goal's).
 	Evidence []string `json:"evidence,omitempty"`
+	// Goal, on ActGoalQualify and ActGoalAccept (SDK v0.9.0), is the goal
+	// acted on.
+	Goal string `json:"goal,omitempty"`
 }
 
 // HostActResult is the gateway's disposition.
@@ -557,13 +616,36 @@ type HostExecutionResult struct {
 
 // HostCheckParams asks the host to run a predicate's defined check for a
 // work unit and record what it observed, as principal As.
+//
+// Subject (SDK v0.9.0) names the evidence subject instead of Work:
+// "work:<id>" or "goal:<id>" (GoalSubject), as gip evidence run
+// --subject does. A goal's outcome checks are run this way by the
+// reviewer that qualifies it, in the workspace holding the integrated
+// code; for a goal subject the host accepts work.review as well as
+// work.execute. Name exactly one of Work and Subject. Evidence the
+// reviewer records is flagged as a reviewer's (gip ADR-0024 §5) when it
+// holds a work.review grant covering the subject and did not build it. A
+// gip that predates the field refuses a request without Work.
 type HostCheckParams struct {
 	Work      string `json:"work"`
+	Subject   string `json:"subject,omitempty"`
 	Predicate string `json:"predicate"`
 	As        string `json:"as"`
 	Workspace string `json:"workspace,omitempty"` // as in HostActParams
 	RequestID string `json:"request_id,omitempty"`
 }
+
+// Evidence subject prefixes for HostCheckParams.Subject (SDK v0.9.0).
+const (
+	SubjectWork = "work:"
+	SubjectGoal = "goal:"
+)
+
+// GoalSubject returns the evidence subject naming goal id: "goal:<id>".
+func GoalSubject(id string) string { return SubjectGoal + id }
+
+// WorkSubject returns the evidence subject naming work unit id.
+func WorkSubject(id string) string { return SubjectWork + id }
 
 // HostCheckResult reports the observed run.
 type HostCheckResult struct {

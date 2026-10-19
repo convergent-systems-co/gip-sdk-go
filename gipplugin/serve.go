@@ -115,7 +115,9 @@ func (r *Request) Contract(ctx context.Context, work string, out any) (string, e
 }
 
 // Act asks the host to submit a work transition as a trusted agent
-// principal. Requires work.execute. A refusal is a result, not an error.
+// principal. Requires work.execute; the review, goal.qualify and
+// goal.accept kinds require work.review instead. A refusal is a result,
+// not an error.
 func (r *Request) Act(ctx context.Context, p protocol.HostActParams) (*protocol.HostActResult, error) {
 	var out protocol.HostActResult
 	if err := r.session.call(ctx, protocol.MethodHostAct, p, &out); err != nil {
@@ -125,7 +127,7 @@ func (r *Request) Act(ctx context.Context, p protocol.HostActParams) (*protocol.
 }
 
 // Check asks the host to run a predicate's defined check and record what
-// it observed. Requires work.execute.
+// it observed. Requires work.execute (or, for a goal subject, work.review).
 func (r *Request) Check(ctx context.Context, p protocol.HostCheckParams) (*protocol.HostCheckResult, error) {
 	var out protocol.HostCheckResult
 	if err := r.session.call(ctx, protocol.MethodHostCheck, p, &out); err != nil {
@@ -196,6 +198,30 @@ func (r *Request) Finding(ctx context.Context, p protocol.HostFindingParams) (*p
 func (r *Request) PlanPass(ctx context.Context, p protocol.HostPlanPassParams) (*protocol.HostPlanPassResult, error) {
 	var out protocol.HostPlanPassResult
 	if err := r.session.call(ctx, protocol.MethodHostPlanPass, p, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// IntentPropose records a proposed intent revision (SDK v0.9.0, gip
+// ADR-0024 §6) as a trusted agent principal. It changes nothing until a
+// person adopts it. A refusal is a disposition, not an error. Requires
+// plan.write.
+func (r *Request) IntentPropose(ctx context.Context, p protocol.HostIntentProposeParams) (*protocol.HostIntentProposeResult, error) {
+	var out protocol.HostIntentProposeResult
+	if err := r.session.call(ctx, protocol.MethodHostIntentPropose, p, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeliveryPrepare has gip prepare the delivery for the current intent
+// revisions (SDK v0.9.0, gip ADR-0024 §7) as a trusted reviewer
+// principal. A refusal is a disposition, not an error. Requires
+// work.review.
+func (r *Request) DeliveryPrepare(ctx context.Context, p protocol.HostDeliveryPrepareParams) (*protocol.HostDeliveryPrepareResult, error) {
+	var out protocol.HostDeliveryPrepareResult
+	if err := r.session.call(ctx, protocol.MethodHostDeliveryPrepare, p, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
