@@ -56,3 +56,52 @@ func TestPlanDesign(t *testing.T) {
 		t.Fatal("a malformed contract is an error")
 	}
 }
+
+// TestContractDesign pins the contract design's pin fields (SDK v0.7.2):
+// the served revision, whether it is the unit's pin, and the plan's
+// current revision. Older contracts decode with the fields zero.
+func TestContractDesign(t *testing.T) {
+	r := HostContractResult{Contract: json.RawMessage(`{"schema":"gip.work-contract/v1","design":{"revision":2,"pass":3,"digest":"sha256:a","content":"routes","planners":[{"planner":"p","model":"m"}],` +
+		`"pinned":true,"current_revision":3,"current_digest":"sha256:b"}}`)}
+	d, err := r.Design()
+	if err != nil || d == nil {
+		t.Fatalf("contract design %+v (%v)", d, err)
+	}
+	if d.Content != "routes" || d.Revision != 2 || d.Pass != 3 || d.Digest != "sha256:a" || d.Planners[0].Model != "m" {
+		t.Fatalf("embedded plan design %+v", d.PlanDesign)
+	}
+	if !d.Pinned || d.CurrentRevision != 3 || d.CurrentDigest != "sha256:b" {
+		t.Fatalf("pin fields %+v", d)
+	}
+	if !d.Superseded() {
+		t.Fatal("a pinned design whose digest differs from the current one is superseded")
+	}
+	if p := d.Pin(); p != (DesignPin{Revision: 2, Digest: "sha256:a"}) {
+		t.Fatalf("pin %+v", p)
+	}
+
+	// Same revision number, different text (a ledger merge): the digest decides.
+	d.CurrentRevision, d.CurrentDigest = 2, "sha256:c"
+	if !d.Superseded() {
+		t.Fatal("the digest, not the revision number, decides supersession")
+	}
+	d.CurrentDigest = "sha256:a"
+	if d.Superseded() {
+		t.Fatal("the current design is not superseded")
+	}
+
+	// A gip that predates pinning: no pin fields, never superseded.
+	old := HostContractResult{Contract: json.RawMessage(`{"design":{"revision":1,"pass":1,"digest":"sha256:x","content":"c"}}`)}
+	d, err = old.Design()
+	if err != nil || d == nil || d.Pinned || d.CurrentRevision != 0 || d.CurrentDigest != "" || d.Superseded() {
+		t.Fatalf("pre-pinning contract design %+v (%v)", d, err)
+	}
+
+	// Round trip: the fields encode flat, beside the plan design's.
+	b, _ := json.Marshal(ContractDesign{PlanDesign: PlanDesign{Revision: 1, Pass: 1, Digest: "sha256:x", Content: "c"}, Pinned: true, CurrentRevision: 1, CurrentDigest: "sha256:x"})
+	for _, f := range []string{`"revision":1`, `"content":"c"`, `"pinned":true`, `"current_revision":1`, `"current_digest":"sha256:x"`} {
+		if !strings.Contains(string(b), f) {
+			t.Fatalf("encoded contract design lacks %s: %s", f, b)
+		}
+	}
+}
