@@ -80,3 +80,17 @@ func TestPlanMessages(t *testing.T) {
 		t.Fatalf("decoded %+v (%v)", f, err)
 	}
 }
+
+// v0.7.1: an in-flight unit's pinned design revision.
+func TestPlanWorkDesignPin(t *testing.T) {
+	var w PlanWork
+	dec := json.NewDecoder(strings.NewReader(`{"execution":"in_progress","frontier_status":"IN_PROGRESS","reasons":[],"design":{"revision":1,"digest":"sha256:a"}}`))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&w); err != nil || w.Design == nil || w.Design.Revision != 1 || w.Design.Digest != "sha256:a" {
+		t.Fatalf("decoded %+v (%v)", w, err)
+	}
+	b, _ := json.Marshal(PlanWork{Reasons: []Reason{}})
+	if strings.Contains(string(b), "design") {
+		t.Fatalf("an unpinned unit has no design: %s", b)
+	}
+}
