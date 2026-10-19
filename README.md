@@ -85,6 +85,7 @@ Most of the time goes into planning, so development is quick (ADR-0021 amendment
 | `host/plan` (`PlanDocument`) | `Design` | The current design (`PlanDesign`: `revision`, `pass`, `digest`, `content`, `planners`); absent until a pass sets one. |
 | `host/plan` (`PlanDocument`) | `Delivery` | Present once the final discovery ran for the current intent revision (`PlanDelivery`: its `pass` and the open `findings` left for the human at delivery). The final discovery fires once per intent revision: completing the work it scheduled does not make it due again. |
 | `host/contract` (`HostContractResult`) | `Design()` | The design the work contract carries (`design`, same shape), or nil. |
+| `host/plan` (`PlanWork`) | `Design` | (v0.7.1) The design revision an in-flight unit was started on (`DesignPin`: `revision`, `digest`); the unit and its reviewer build to it while the plan's design moves on. Absent for a unit not started. |
 
 All of it is additive: a gip that predates it never sends the new fields, and refuses a pass that names `design` (`INVALID_PAYLOAD`).
 

@@ -130,6 +130,19 @@ type PlanWork struct {
 	NextAction string   `json:"next_action,omitempty"`
 	Lease      *Lease   `json:"lease,omitempty"`
 	Reasons    []Reason `json:"reasons"`
+	// Design (v0.7.1) is the design revision the unit was started on and
+	// is built and reviewed to; the document's Design is the current one.
+	// Absent for a unit not started, or started before the plan had a
+	// design.
+	Design *DesignPin `json:"design,omitempty"`
+}
+
+// DesignPin identifies one revision of the plan's design by its number
+// and the digest of its content (after a ledger merge two branches may
+// each hold a different text under the same number).
+type DesignPin struct {
+	Revision int    `json:"revision"`
+	Digest   string `json:"digest"`
 }
 
 // PlanNode is one node of the plan document. Kind is root, goal (first
