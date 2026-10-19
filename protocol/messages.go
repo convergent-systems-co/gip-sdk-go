@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 )
@@ -429,14 +430,15 @@ const (
 	// ActGoalQualify and ActGoalAccept (SDK v0.9.0, gip ADR-0024 D3, §7)
 	// qualify and accept the goal named in Goal (Work stays empty), as the
 	// reviewer: Rationale says why, Evidence optionally names the goal
-	// evidence relied on. They need the work.review plugin permission
+	// evidence relied on. They need the work.deliver plugin permission
 	// and, in the project, the acting principal's goal.qualify or
 	// goal.accept grant. A principal that started or reworked any unit in
 	// the goal's subtree, or created or admitted the goal or anything in
 	// it, is refused (CONFLICT_OF_INTEREST): the reviewer acts, not the
 	// builder or the planner. Under rules 2 a qualified, unaccepted root
 	// goal is ready with next action goal.accept (ReasonAcceptanceDue). A
-	// gip that predates them refuses the kinds.
+	// gip built against an earlier SDK does not know the kinds and
+	// refuses the act.
 	ActGoalQualify = "goal.qualify"
 	ActGoalAccept  = "goal.accept"
 )
@@ -486,8 +488,11 @@ type Lease struct {
 // For submit, ResultPath names a gip.work-result/v1 document under
 // <workspace>/.gip/results/<work>/ and RunChecks runs the defined checks.
 type HostActParams struct {
-	Kind       string `json:"kind"`
-	Work       string `json:"work"`
+	Kind string `json:"kind"`
+	// Work is the work unit acted on: every kind but goal.qualify and
+	// goal.accept, which name Goal instead (ValidateTarget). Omitted when
+	// empty (SDK v0.9.0).
+	Work       string `json:"work,omitempty"`
 	As         string `json:"as"`
 	Workspace  string `json:"workspace,omitempty"`
 	RequestID  string `json:"request_id,omitempty"`
@@ -521,6 +526,26 @@ type HostActParams struct {
 	// Goal, on ActGoalQualify and ActGoalAccept (SDK v0.9.0), is the goal
 	// acted on.
 	Goal string `json:"goal,omitempty"`
+}
+
+// IsGoalAct reports whether kind acts on a goal (ActGoalQualify,
+// ActGoalAccept) rather than a work unit.
+func IsGoalAct(kind string) bool { return kind == ActGoalQualify || kind == ActGoalAccept }
+
+// ValidateTarget checks that the act names exactly the object its kind
+// acts on: Goal (and no Work) for a goal act, Work (and no Goal)
+// otherwise. Request.Act calls it before sending.
+func (p *HostActParams) ValidateTarget() error {
+	if IsGoalAct(p.Kind) {
+		if p.Goal == "" || p.Work != "" {
+			return fmt.Errorf("act %s names a goal and no work unit", p.Kind)
+		}
+		return nil
+	}
+	if p.Work == "" || p.Goal != "" {
+		return fmt.Errorf("act %q names a work unit and no goal", p.Kind)
+	}
+	return nil
 }
 
 // HostActResult is the gateway's disposition.
@@ -621,13 +646,16 @@ type HostExecutionResult struct {
 // "work:<id>" or "goal:<id>" (GoalSubject), as gip evidence run
 // --subject does. A goal's outcome checks are run this way by the
 // reviewer that qualifies it, in the workspace holding the integrated
-// code; for a goal subject the host accepts work.review as well as
-// work.execute. Name exactly one of Work and Subject. Evidence the
-// reviewer records is flagged as a reviewer's (gip ADR-0024 §5) when it
-// holds a work.review grant covering the subject and did not build it. A
-// gip that predates the field refuses a request without Work.
+// code; a goal subject needs the work.deliver plugin permission (a work
+// subject, work.execute). Name exactly one of Work and Subject
+// (ValidateTarget). Evidence the reviewer records is flagged as a
+// reviewer's (gip ADR-0024 §5) when it holds a work.review grant
+// covering the subject and did not build it. A gip built against an
+// earlier SDK drops Subject and answers a request without Work with an
+// invalid-params error (host.invalid_params). Work is omitted when empty
+// (SDK v0.9.0).
 type HostCheckParams struct {
-	Work      string `json:"work"`
+	Work      string `json:"work,omitempty"`
 	Subject   string `json:"subject,omitempty"`
 	Predicate string `json:"predicate"`
 	As        string `json:"as"`
@@ -646,6 +674,28 @@ func GoalSubject(id string) string { return SubjectGoal + id }
 
 // WorkSubject returns the evidence subject naming work unit id.
 func WorkSubject(id string) string { return SubjectWork + id }
+
+// IsGoalSubject reports whether the check's subject is a goal.
+func (p *HostCheckParams) IsGoalSubject() bool { return strings.HasPrefix(p.Subject, SubjectGoal) }
+
+// ValidateTarget checks that the check names exactly one of Work and
+// Subject, and that a Subject is "work:<id>" or "goal:<id>" with an id.
+// Request.Check calls it before sending.
+func (p *HostCheckParams) ValidateTarget() error {
+	if (p.Work == "") == (p.Subject == "") {
+		return errors.New("host/check names exactly one of work and subject")
+	}
+	if p.Subject != "" {
+		id, ok := strings.CutPrefix(p.Subject, SubjectGoal)
+		if !ok {
+			id, ok = strings.CutPrefix(p.Subject, SubjectWork)
+		}
+		if !ok || id == "" {
+			return fmt.Errorf("subject %q is not work:<id> or goal:<id>", p.Subject)
+		}
+	}
+	return nil
+}
 
 // HostCheckResult reports the observed run.
 type HostCheckResult struct {

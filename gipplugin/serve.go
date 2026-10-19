@@ -115,10 +115,14 @@ func (r *Request) Contract(ctx context.Context, work string, out any) (string, e
 }
 
 // Act asks the host to submit a work transition as a trusted agent
-// principal. Requires work.execute; the review, goal.qualify and
-// goal.accept kinds require work.review instead. A refusal is a result,
-// not an error.
+// principal. Requires work.execute; the review kind requires work.review
+// and the goal.qualify and goal.accept kinds work.deliver instead. A
+// refusal is a result, not an error; an act that does not name exactly
+// its target (HostActParams.ValidateTarget) is an error and is not sent.
 func (r *Request) Act(ctx context.Context, p protocol.HostActParams) (*protocol.HostActResult, error) {
+	if err := p.ValidateTarget(); err != nil {
+		return nil, err
+	}
 	var out protocol.HostActResult
 	if err := r.session.call(ctx, protocol.MethodHostAct, p, &out); err != nil {
 		return nil, err
@@ -127,8 +131,13 @@ func (r *Request) Act(ctx context.Context, p protocol.HostActParams) (*protocol.
 }
 
 // Check asks the host to run a predicate's defined check and record what
-// it observed. Requires work.execute (or, for a goal subject, work.review).
+// it observed. Requires work.execute (for a goal subject, work.deliver).
+// A request that does not name exactly one of Work and Subject
+// (HostCheckParams.ValidateTarget) is an error and is not sent.
 func (r *Request) Check(ctx context.Context, p protocol.HostCheckParams) (*protocol.HostCheckResult, error) {
+	if err := p.ValidateTarget(); err != nil {
+		return nil, err
+	}
 	var out protocol.HostCheckResult
 	if err := r.session.call(ctx, protocol.MethodHostCheck, p, &out); err != nil {
 		return nil, err
@@ -184,7 +193,8 @@ func (r *Request) PlanReport(ctx context.Context, ifDigest string, idleSlots int
 }
 
 // Finding records discovered work against a plan node (SDK v0.4.0). A
-// refusal is a disposition, not an error. Requires work.execute.
+// refusal is a disposition, not an error. Requires work.execute, or
+// work.review for a finding of kind rescope or split (SDK v0.9.0).
 func (r *Request) Finding(ctx context.Context, p protocol.HostFindingParams) (*protocol.HostFindingResult, error) {
 	var out protocol.HostFindingResult
 	if err := r.session.call(ctx, protocol.MethodHostFinding, p, &out); err != nil {
@@ -218,7 +228,7 @@ func (r *Request) IntentPropose(ctx context.Context, p protocol.HostIntentPropos
 // DeliveryPrepare has gip prepare the delivery for the current intent
 // revisions (SDK v0.9.0, gip ADR-0024 §7) as a trusted reviewer
 // principal. A refusal is a disposition, not an error. Requires
-// work.review.
+// work.deliver.
 func (r *Request) DeliveryPrepare(ctx context.Context, p protocol.HostDeliveryPrepareParams) (*protocol.HostDeliveryPrepareResult, error) {
 	var out protocol.HostDeliveryPrepareResult
 	if err := r.session.call(ctx, protocol.MethodHostDeliveryPrepare, p, &out); err != nil {

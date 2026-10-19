@@ -167,3 +167,16 @@ func TestIntentProposeAndDeliveryPrepareCallTheHost(t *testing.T) {
 		}
 	}
 }
+
+// TestActAndCheckValidateTheirTarget: an act or check that does not name
+// exactly its target is an error before anything is sent (the request has
+// no session to send on).
+func TestActAndCheckValidateTheirTarget(t *testing.T) {
+	r := &Request{}
+	if _, err := r.Act(context.Background(), protocol.HostActParams{Kind: protocol.ActGoalAccept, Goal: "g", Work: "w", As: "agent:r"}); err == nil {
+		t.Fatal("a goal act naming a work unit is refused")
+	}
+	if _, err := r.Check(context.Background(), protocol.HostCheckParams{Work: "w", Subject: "goal:g", Predicate: "p", As: "agent:r"}); err == nil {
+		t.Fatal("a check naming both work and subject is refused")
+	}
+}

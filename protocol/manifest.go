@@ -140,11 +140,19 @@ const (
 	PermWorkRead    = "work.read"    // frontier and work contracts
 	PermWorkExecute = "work.execute" // act on work as a trusted agent principal; host-run checks
 	PermConfigRead  = "config.read"  // the plugin's own <config>/<name>.yaml
-	// PermWorkReview (SDK v0.6.0) grants host/act kind review only: decide
-	// an open review ceremony as a trusted agent principal. It is separate
+	// PermWorkReview (SDK v0.6.0) grants deciding a review: host/act kind
+	// review (an open review ceremony, as a trusted agent principal) and,
+	// since SDK v0.9.0, host/finding of kind rescope or split, the
+	// reviewer's way of sending a unit back to planning. It is separate
 	// from work.execute so that reviewing is granted on its own (least
 	// privilege), and so an executor is not a reviewer unless trusted as one.
 	PermWorkReview = "work.review"
+	// PermWorkDeliver (SDK v0.9.0, gip ADR-0024 §7) grants the reviewer's
+	// completion acts: host/act kinds goal.qualify and goal.accept,
+	// host/check on a goal subject, and host/delivery/prepare. Neither
+	// work.execute nor work.review includes it, so a plugin qualifies,
+	// accepts and delivers only when trusted to.
+	PermWorkDeliver = "work.deliver"
 	// PermPlanWrite (SDK v0.4.0) is declared in plan.go.
 )
 
@@ -152,7 +160,7 @@ const (
 var KnownPermissions = []string{
 	PermTelemetryEmit, PermStateRead, PermIntentRead, PermProposalsSubmit,
 	PermEvidenceSubmit, PermPluginData, PermWorkRead, PermWorkExecute, PermConfigRead,
-	PermPlanWrite, PermWorkReview,
+	PermPlanWrite, PermWorkReview, PermWorkDeliver,
 }
 
 // MaxCommandTimeoutSeconds bounds a command's declared timeout.

@@ -177,7 +177,7 @@ func TestGoalActsAndChecks(t *testing.T) {
 		t.Fatal("goal act kinds and the acceptance reason are part of the protocol")
 	}
 	encodes(t, HostActParams{Kind: ActGoalAccept, Goal: "g1", As: "agent:reviewer", Rationale: "outcome observed", Evidence: []string{"ev-9"}},
-		[]string{`"kind":"goal.accept"`, `"goal":"g1"`, `"evidence":["ev-9"]`}, `"ceremony"`, `"outcome"`)
+		[]string{`"kind":"goal.accept"`, `"goal":"g1"`, `"evidence":["ev-9"]`}, `"ceremony"`, `"outcome"`, `"work"`)
 	encodes(t, HostActParams{Kind: ActStart, Work: "w", As: "agent:x"}, nil, "goal")
 
 	if GoalSubject("g1") != "goal:g1" || WorkSubject("w") != "work:w" {
@@ -186,10 +186,80 @@ func TestGoalActsAndChecks(t *testing.T) {
 	encodes(t, HostCheckParams{Subject: GoalSubject("g1"), Predicate: "weather.shown", As: "agent:reviewer"}, []string{`"subject":"goal:g1"`})
 	encodes(t, HostCheckParams{Work: "w", Predicate: "p", As: "agent:x"}, []string{`"work":"w"`}, "subject")
 	var c HostCheckParams
-	strict(t, `{"work":"","subject":"goal:g1","predicate":"p","as":"agent:reviewer","workspace":"/w"}`, &c)
-	if c.Subject != "goal:g1" {
+	strict(t, `{"subject":"goal:g1","predicate":"p","as":"agent:reviewer","workspace":"/w"}`, &c)
+	if c.Subject != "goal:g1" || !c.IsGoalSubject() || c.ValidateTarget() != nil {
 		t.Fatalf("check %+v", c)
 	}
+	encodes(t, HostCheckParams{Subject: "goal:g1", Predicate: "p", As: "a"}, nil, `"work"`)
+
+	for name, p := range map[string]HostActParams{
+		"goal act with work":   {Kind: ActGoalQualify, Goal: "g", Work: "w"},
+		"goal act, no goal":    {Kind: ActGoalAccept},
+		"work act with a goal": {Kind: ActStart, Work: "w", Goal: "g"},
+		"work act, no work":    {Kind: ActSubmit},
+	} {
+		if p.ValidateTarget() == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+	for _, p := range []HostActParams{{Kind: ActGoalAccept, Goal: "g"}, {Kind: ActReview, Work: "w"}} {
+		if err := p.ValidateTarget(); err != nil {
+			t.Errorf("%s: %v", p.Kind, err)
+		}
+	}
+	for name, p := range map[string]HostCheckParams{
+		"both":        {Work: "w", Subject: "goal:g"},
+		"neither":     {},
+		"bad subject": {Subject: "invariant:i"},
+		"no id":       {Subject: "goal:"},
+	} {
+		if p.ValidateTarget() == nil {
+			t.Errorf("check %s: want an error", name)
+		}
+	}
+	if err := (&HostCheckParams{Subject: WorkSubject("w")}).ValidateTarget(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDeliverPermission pins work.deliver: a known permission of its own,
+// declared by the plugin before a command may use it.
+func TestDeliverPermission(t *testing.T) {
+	if PermWorkDeliver != "work.deliver" {
+		t.Fatal("work.deliver is part of the protocol")
+	}
+	found := false
+	for _, p := range KnownPermissions {
+		found = found || p == PermWorkDeliver
+	}
+	if !found {
+		t.Fatal("work.deliver is a known permission")
+	}
+	m := `{"schema":"gip.plugin-manifest/v1","name":"gip-plugin-reviewer","version":"0.1.0","protocol_versions":[1],"executable":"x",
+	"permissions":["work.read","work.review","work.deliver"],
+	"commands":[{"name":"deliver","summary":"s","permissions":["work.read","work.deliver"]}]}`
+	if _, err := ParseManifest([]byte(m)); err != nil {
+		t.Fatalf("a reviewer declares work.deliver: %v", err)
+	}
+	if _, err := ParseManifest([]byte(strings.Replace(m, `"work.review","work.deliver"],`, `"work.review"],`, 1))); err == nil {
+		t.Fatal("a command cannot use work.deliver the plugin does not declare")
+	}
+}
+
+// TestQuestionClosedBy pins closed_by on questions and ambiguities.
+func TestQuestionClosedBy(t *testing.T) {
+	var q PlanQuestion
+	strict(t, `{"id":"amb-1","text":"t","class":"intent","status":"answered","closed_by":{"kind":"revision","ref":"main@4"}}`, &q)
+	if q.ClosedBy == nil || q.ClosedBy.Kind != ClosedByRevision || q.ClosedBy.Ref != "main@4" {
+		t.Fatalf("question %+v", q)
+	}
+	var a Ambiguity
+	strict(t, `{"id":"amb-2","for_revision":3,"text":"t","consequential":false,"status":"defaulted","closed_by":{"kind":"delivery","ref":"delivery-1"},
+	"raised":{"principal":"agent:p","request_id":"r","event_seq":1,"at":"2026-10-19T10:00:00Z"}}`, &a)
+	if a.ClosedBy == nil || a.ClosedBy.Kind != ClosedByDelivery || a.Status != QuestionDefaulted {
+		t.Fatalf("ambiguity %+v", a)
+	}
+	encodes(t, PlanQuestion{Text: "t", Class: QuestionClassIntent}, nil, "closed_by")
 }
 
 // TestContractReview pins the work contract's review block.
@@ -256,6 +326,19 @@ func TestResolutionAndAmbiguity(t *testing.T) {
 	if err := CheckResolutionSpan("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", strings.Repeat("a", 40)); err == nil {
 		t.Fatal("one long word is not 4 words")
 	}
+	// Lengths are bytes, not characters: four 3-character words of
+	// two-byte runes are 27 bytes (15 characters) and pass; the same in
+	// ASCII is 15 bytes and fails.
+	multi := "Le résumé ééé ééé ééé ééé est ici."
+	if err := CheckResolutionSpan("ééé ééé ééé ééé", multi); err != nil {
+		t.Fatalf("a 27-byte, 15-character span: %v", err)
+	}
+	if err := CheckResolutionSpan("eee eee eee eee", "x eee eee eee eee y"); err == nil {
+		t.Fatal("a 15-byte span is too short")
+	}
+	if err := CheckResolutionSpan("ééé ééé ééé \xff\xff\xff\xff\xff\xff\xff\xff", multi); err == nil {
+		t.Fatal("invalid UTF-8 is refused")
+	}
 
 	var s HostStateResult
 	strict(t, `{"project_id":"p","state_head":9,"intent":{"id":"main","revision":2,"interpretation_status":"pending","open_ambiguities":[
@@ -310,16 +393,33 @@ func TestRuntimeBlock(t *testing.T) {
 		t.Fatalf("a rendered block parses back: %+v %v", again, err)
 	}
 
+	// A closing fence may be indented up to three spaces and be longer.
+	if _, err := ParseRuntimeBlock("```gip-runtime\n{\"none\":true}\n   `````\n"); err != nil {
+		t.Fatalf("a closing fence indented three spaces: %v", err)
+	}
 	none, err := ParseRuntimeBlock("~~~~ gip-runtime\n{\"none\":true}\n~~~~\n")
 	if err != nil || !none.None || none.Validate() != nil {
 		t.Fatalf("none %+v %v", none, err)
 	}
 	for name, d := range map[string]string{
-		"none":     "# Design\n```go\nx\n```\n",
-		"two":      "```gip-runtime\n{\"none\":true}\n```\n```gip-runtime\n{\"none\":true}\n```\n",
-		"unknown":  "```gip-runtime\n{\"none\":true,\"shell\":\"sh\"}\n```\n",
-		"trailing": "```gip-runtime\n{\"none\":true} {}\n```\n",
-		"inside":   "````md\n```gip-runtime\n{\"none\":true}\n```\n````\n",
+		"none":            "# Design\n```go\nx\n```\n",
+		"two":             "```gip-runtime\n{\"none\":true}\n```\n```gip-runtime\n{\"none\":true}\n```\n",
+		"unknown":         "```gip-runtime\n{\"none\":true,\"shell\":\"sh\"}\n```\n",
+		"trailing":        "```gip-runtime\n{\"none\":true} {}\n```\n",
+		"inside":          "````md\n```gip-runtime\n{\"none\":true}\n```\n````\n",
+		"unclosed":        "# D\n```gip-runtime\n{\"none\":true}\n",
+		"unclosed other":  "```gip-runtime\n{\"none\":true}\n```\n```go\nx\n",
+		"fence mismatch":  "```gip-runtime\n{\"none\":true}\n~~~\n",
+		"short close":     "````gip-runtime\n{\"none\":true}\n```\n",
+		"indented close":  "```gip-runtime\n{\"none\":true}\n    ```\n```\n",
+		"tab close":       "```gip-runtime\n{\"none\":true}\n\t```\n",
+		"duplicate key":   "```gip-runtime\n{\"none\":false,\"none\":true}\n```\n",
+		"dup nested":      "```gip-runtime\n{\"start\":[\"x\"],\"ready\":{\"url\":\"http://localhost/\",\"url\":\"http://localhost:2/\"},\"timeout_seconds\":1}\n```\n",
+		"dup env":         "```gip-runtime\n{\"start\":[\"x\"],\"ready\":{\"check\":[\"c\"]},\"timeout_seconds\":1,\"env\":{\"A\":\"1\",\"A\":\"2\"}}\n```\n",
+		"case key":        "```gip-runtime\n{\"None\":true}\n```\n",
+		"case nested key": "```gip-runtime\n{\"start\":[\"x\"],\"ready\":{\"URL\":\"http://localhost/\"},\"timeout_seconds\":1}\n```\n",
+		"not an object":   "```gip-runtime\n[1]\n```\n",
+		"wrong type":      "```gip-runtime\n{\"timeout_seconds\":\"5\"}\n```\n",
 	} {
 		if _, err := ParseRuntimeBlock(d); err == nil {
 			t.Errorf("%s: want an error", name)
@@ -342,6 +442,41 @@ func TestRuntimeBlock(t *testing.T) {
 		}
 	}
 	ok := RuntimeBlock{Start: []string{"x"}, Ready: &RuntimeReady{Check: []string{"curl", "-f", "u"}}, TimeoutSeconds: 600}
+	url := func(u string) RuntimeBlock {
+		return RuntimeBlock{Start: []string{"x"}, Ready: &RuntimeReady{URL: u}, TimeoutSeconds: 5}
+	}
+	env := func(k string) RuntimeBlock {
+		return RuntimeBlock{Start: []string{"x"}, Ready: &RuntimeReady{URL: "http://127.0.0.1:1/"}, TimeoutSeconds: 5, Env: map[string]string{k: "v"}}
+	}
+	for name, bad := range map[string]RuntimeBlock{
+		"lower gip_":     env("gip_key_passphrase"),
+		"mixed Dyld_":    env("Dyld_Insert_Libraries"),
+		"lower ld_":      env("ld_preload"),
+		"empty key":      env(""),
+		"key with =":     env("A=B"),
+		"key with NUL":   env("A\x00B"),
+		"leading digit":  env("1A"),
+		"dash":           env("MY-VAR"),
+		"empty check":    {Start: []string{"x"}, Ready: &RuntimeReady{Check: []string{"curl", ""}}, TimeoutSeconds: 5},
+		"empty start":    {Start: []string{"x", ""}, Ready: &RuntimeReady{Check: []string{"c"}}, TimeoutSeconds: 5},
+		"ftp url":        url("ftp://127.0.0.1/"),
+		"remote url":     url("http://example.com/healthz"),
+		"lookalike host": url("http://127.0.0.1.example.com/"),
+		"userinfo":       url("http://u:p@localhost/"),
+		"no scheme":      url("localhost:8080"),
+	} {
+		if bad.Validate() == nil {
+			t.Errorf("%s: want a validation error", name)
+		}
+	}
+	for _, u := range []string{"http://127.0.0.1:8080/healthz", "https://localhost/", "http://[::1]:9000/"} {
+		if b := url(u); b.Validate() != nil {
+			t.Errorf("%s: %v", u, b.Validate())
+		}
+	}
+	if b := env("PORT_2"); b.Validate() != nil {
+		t.Fatal(b.Validate())
+	}
 	if err := ok.Validate(); err != nil {
 		t.Fatal(err)
 	}

@@ -375,8 +375,12 @@ func (d *PlanDocument) Node(a string) (*PlanNode, bool) {
 // recorded by a builder of the unit, by its reviewer (a current
 // work.review grant covering it) or by a principal granted plan.find;
 // rescope also needs the unit's review rejections (ContractReview) to
-// have reached the cap. Either makes a rescope pass due at once. A gip
-// that predates kinds refuses a finding that names one.
+// have reached the cap. Either makes a rescope pass due at once. A
+// finding needs the work.execute plugin permission; one of kind rescope
+// or split may instead be recorded under work.review, so a reviewer
+// plugin needs no work.execute to send a unit back to planning. A gip
+// built against an earlier SDK drops Kind and records a work finding:
+// check that the host supports kinds before relying on them.
 type HostFindingParams struct {
 	Work      string `json:"work,omitempty"`
 	Node      string `json:"node,omitempty"`

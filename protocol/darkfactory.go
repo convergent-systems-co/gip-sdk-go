@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -25,8 +28,10 @@ import (
 //
 // Questions, proposals, deliveries and re-scope exist only on rules 2
 // projects (RulesDarkFactory); on rules 1 gip refuses them
-// (RULES_REQUIRED). A gip that predates a field never sends it, and
-// refuses a request that names it.
+// (RULES_REQUIRED). A gip built against an earlier SDK never sends the
+// new fields; it decodes host requests into its own types, so it drops
+// fields it does not know, refuses act kinds it does not know, and
+// answers new methods with method-not-found.
 const (
 	// MethodHostIntentPropose records a proposed intent revision as a
 	// trusted agent principal (plan.write). It needs no project grant
@@ -35,7 +40,7 @@ const (
 	MethodHostIntentPropose = "host/intent/propose"
 	// MethodHostDeliveryPrepare has gip prepare the delivery for the
 	// current intent revisions as a trusted reviewer principal
-	// (work.review; the delivery.prepare grant, which no wildcard covers).
+	// (work.deliver; the delivery.prepare grant, which no wildcard covers).
 	MethodHostDeliveryPrepare = "host/delivery/prepare"
 )
 
@@ -112,6 +117,25 @@ type PlanQuestion struct {
 	// Refs name findings and plan nodes the question arose from.
 	Refs   []string `json:"refs,omitempty"`
 	Status string   `json:"status,omitempty"`
+	// ClosedBy says what closed a question that is no longer open.
+	ClosedBy *QuestionClosure `json:"closed_by,omitempty"`
+}
+
+// What closes a question (QuestionClosure.Kind).
+const (
+	// ClosedByRevision: a human's answering intent revision; Ref is
+	// "<intent>@<revision>" (for example "main@4"). The question is
+	// answered, or withdrawn when the revision did not answer it.
+	ClosedByRevision = "revision"
+	// ClosedByDelivery: a delivery acceptance closed the held question
+	// with its default; Ref is the delivery id ("delivery-<n>").
+	ClosedByDelivery = "delivery"
+)
+
+// QuestionClosure is a question's closed_by (gip intent.v1, ADR-0024 §6).
+type QuestionClosure struct {
+	Kind string `json:"kind"`
+	Ref  string `json:"ref"`
 }
 
 // PlanIntent is one current intent revision as the plan document carries
@@ -363,24 +387,25 @@ func CheckResolutionSpan(span, content string) error {
 // Blocks). ResolutionBasis and ResolutionSpan record an agent's
 // resolution.
 type Ambiguity struct {
-	ID              string      `json:"id"`
-	ForRevision     int         `json:"for_revision"`
-	Text            string      `json:"text"`
-	Span            string      `json:"span,omitempty"`
-	Consequential   bool        `json:"consequential"`
-	Class           string      `json:"class,omitempty"`
-	Options         []string    `json:"options,omitempty"`
-	Recommended     string      `json:"recommended,omitempty"`
-	Default         string      `json:"default,omitempty"`
-	Node            string      `json:"node,omitempty"`
-	Blocking        bool        `json:"blocking,omitempty"`
-	Refs            []string    `json:"refs,omitempty"`
-	Status          string      `json:"status"`
-	Resolution      string      `json:"resolution,omitempty"`
-	ResolutionBasis string      `json:"resolution_basis,omitempty"`
-	ResolutionSpan  string      `json:"resolution_span,omitempty"`
-	Raised          Provenance  `json:"raised"`
-	Resolved        *Provenance `json:"resolved,omitempty"`
+	ID              string           `json:"id"`
+	ForRevision     int              `json:"for_revision"`
+	Text            string           `json:"text"`
+	Span            string           `json:"span,omitempty"`
+	Consequential   bool             `json:"consequential"`
+	Class           string           `json:"class,omitempty"`
+	Options         []string         `json:"options,omitempty"`
+	Recommended     string           `json:"recommended,omitempty"`
+	Default         string           `json:"default,omitempty"`
+	Node            string           `json:"node,omitempty"`
+	Blocking        bool             `json:"blocking,omitempty"`
+	Refs            []string         `json:"refs,omitempty"`
+	Status          string           `json:"status"`
+	Resolution      string           `json:"resolution,omitempty"`
+	ResolutionBasis string           `json:"resolution_basis,omitempty"`
+	ResolutionSpan  string           `json:"resolution_span,omitempty"`
+	ClosedBy        *QuestionClosure `json:"closed_by,omitempty"`
+	Raised          Provenance       `json:"raised"`
+	Resolved        *Provenance      `json:"resolved,omitempty"`
 }
 
 // Blocks reports whether the ambiguity blocks: Blocking, or, for a record
@@ -477,7 +502,7 @@ const (
 )
 
 // RuntimeRefusedEnvPrefixes are environment key prefixes a runtime block
-// may not set.
+// may not set, compared case-insensitively.
 var RuntimeRefusedEnvPrefixes = []string{"GIP_", "DYLD_", "LD_"}
 
 // RuntimeBlock is the runtime block's JSON: Start is the argv that starts
@@ -492,14 +517,19 @@ type RuntimeBlock struct {
 	Env            map[string]string `json:"env,omitempty"`
 }
 
-// RuntimeReady is exactly one of a URL gip polls until it answers and a
-// check argv gip runs until it exits 0.
+// RuntimeReady is exactly one of a URL gip polls until it answers (http
+// or https on a loopback host: 127.0.0.1, ::1 or localhost) and a check
+// argv gip runs until it exits 0.
 type RuntimeReady struct {
 	URL   string   `json:"url,omitempty"`
 	Check []string `json:"check,omitempty"`
 }
 
-// Validate checks the block as gip does (gip's check is authoritative).
+// Validate checks the block as gip does (gip's check is authoritative):
+// start and ready.check are argvs without empty arguments, ready names
+// exactly one of a loopback http(s) url and a check, the timeout is 1 to
+// 600 seconds, and env keys are identifiers ([A-Za-z_][A-Za-z0-9_]*)
+// that start with none of RuntimeRefusedEnvPrefixes in any case.
 func (b *RuntimeBlock) Validate() error {
 	if b.None {
 		if len(b.Start) > 0 || b.Ready != nil || b.TimeoutSeconds != 0 || len(b.Env) > 0 {
@@ -508,23 +538,91 @@ func (b *RuntimeBlock) Validate() error {
 		return nil
 	}
 	var errs []error
-	if len(b.Start) == 0 || b.Start[0] == "" {
-		errs = append(errs, errors.New("start must be a non-empty argv (or none: true)"))
+	if err := checkArgv("start", b.Start); err != nil {
+		errs = append(errs, err)
 	}
-	if b.Ready == nil || (b.Ready.URL == "") == (len(b.Ready.Check) == 0) {
+	switch {
+	case b.Ready == nil || (b.Ready.URL == "") == (len(b.Ready.Check) == 0):
 		errs = append(errs, errors.New("ready must name exactly one of url and check"))
+	case b.Ready.URL != "":
+		if err := checkLoopbackURL(b.Ready.URL); err != nil {
+			errs = append(errs, err)
+		}
+	default:
+		if err := checkArgv("ready.check", b.Ready.Check); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if b.TimeoutSeconds < MinRuntimeTimeoutSecs || b.TimeoutSeconds > MaxRuntimeTimeoutSecs {
 		errs = append(errs, fmt.Errorf("timeout_seconds must be %d to %d", MinRuntimeTimeoutSecs, MaxRuntimeTimeoutSecs))
 	}
+	keys := make([]string, 0, len(b.Env))
 	for k := range b.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if !envKey(k) {
+			errs = append(errs, fmt.Errorf("env key %q is not an identifier ([A-Za-z_][A-Za-z0-9_]*)", k))
+			continue
+		}
 		for _, p := range RuntimeRefusedEnvPrefixes {
-			if strings.HasPrefix(k, p) {
-				errs = append(errs, fmt.Errorf("env key %q may not start with %s", k, p))
+			if strings.HasPrefix(strings.ToUpper(k), p) {
+				errs = append(errs, fmt.Errorf("env key %q may not start with %s (in any case)", k, p))
 			}
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func checkArgv(name string, argv []string) error {
+	if len(argv) == 0 {
+		return fmt.Errorf("%s must be a non-empty argv", name)
+	}
+	for i, a := range argv {
+		if a == "" {
+			return fmt.Errorf("%s argument %d is empty", name, i)
+		}
+		if strings.ContainsRune(a, 0) {
+			return fmt.Errorf("%s argument %d contains NUL", name, i)
+		}
+	}
+	return nil
+}
+
+func checkLoopbackURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("ready.url: %v", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("ready.url %q must be http or https", raw)
+	}
+	if u.User != nil {
+		return fmt.Errorf("ready.url %q may not carry user information", raw)
+	}
+	switch u.Hostname() {
+	case "127.0.0.1", "::1", "localhost":
+		return nil
+	}
+	return fmt.Errorf("ready.url %q must name a loopback host (127.0.0.1, ::1 or localhost)", raw)
+}
+
+// envKey reports whether k is [A-Za-z_][A-Za-z0-9_]* (so it holds no '='
+// or NUL and is not empty).
+func envKey(k string) bool {
+	if k == "" {
+		return false
+	}
+	for i, c := range k {
+		switch {
+		case c == '_', c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Fence renders the block as the fenced markdown a design carries.
@@ -537,25 +635,40 @@ func (b *RuntimeBlock) Fence() (string, error) {
 }
 
 // ParseRuntimeBlock finds the design's runtime block and decodes it
-// strictly. It is an error when the design holds none or more than one,
-// or when the JSON is malformed or has unknown fields; the block is not
-// validated (call Validate).
+// strictly. It is an error when:
+//   - the design holds no gip-runtime block, or more than one;
+//   - any fenced block is left unclosed (CommonMark would run it to the
+//     end of the document), or a line that would close it is indented
+//     more than three spaces (CommonMark reads it as content);
+//   - the JSON is not one object followed by the end of the block, has a
+//     duplicate key, a key that is unknown or not in its exact case, or a
+//     value of the wrong type.
+//
+// The block is not validated: call Validate.
 func ParseRuntimeBlock(design string) (*RuntimeBlock, error) {
 	var bodies []string
 	lines := strings.Split(design, "\n")
 	for i := 0; i < len(lines); i++ {
-		open := strings.TrimRight(lines[i], " \t\r")
-		fence, info, ok := fenceOpen(open)
+		fence, info, ok := fenceOpen(strings.TrimRight(lines[i], " \t\r"))
 		if !ok {
 			continue
 		}
 		var body []string
+		closed := false
 		j := i + 1
 		for ; j < len(lines); j++ {
-			if c := strings.TrimSpace(lines[j]); strings.HasPrefix(c, fence) && strings.Trim(c, fence[:1]) == "" && len(c) >= len(fence) {
+			indent, isClose := fenceClose(strings.TrimRight(lines[j], " \t\r"), fence)
+			if isClose && indent <= 3 {
+				closed = true
 				break
 			}
+			if isClose {
+				return nil, fmt.Errorf("line %d: a closing fence indented more than three spaces", j+1)
+			}
 			body = append(body, lines[j])
+		}
+		if !closed {
+			return nil, fmt.Errorf("line %d: the fenced block opened here is not closed", i+1)
 		}
 		if info == RuntimeInfoString {
 			bodies = append(bodies, strings.Join(body, "\n"))
@@ -569,16 +682,102 @@ func ParseRuntimeBlock(design string) (*RuntimeBlock, error) {
 	default:
 		return nil, fmt.Errorf("the design has %d %s blocks; exactly one is allowed", len(bodies), RuntimeInfoString)
 	}
-	dec := json.NewDecoder(bytes.NewReader([]byte(bodies[0])))
+	raw := []byte(bodies[0])
+	if err := strictJSONKeys(raw, runtimeShape); err != nil {
+		return nil, fmt.Errorf("%s block: %w", RuntimeInfoString, err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var b RuntimeBlock
 	if err := dec.Decode(&b); err != nil {
 		return nil, fmt.Errorf("%s block: %w", RuntimeInfoString, err)
 	}
-	if dec.More() {
-		return nil, fmt.Errorf("%s block: more than one JSON value", RuntimeInfoString)
-	}
 	return &b, nil
+}
+
+// jsonShape names the keys an object may hold, in their exact case (nil
+// fields: any key); a nil *jsonShape accepts any value.
+type jsonShape struct {
+	fields map[string]*jsonShape
+}
+
+var runtimeShape = &jsonShape{fields: map[string]*jsonShape{
+	"none": nil, "start": nil, "timeout_seconds": nil,
+	"ready": {fields: map[string]*jsonShape{"url": nil, "check": nil}},
+	"env":   {},
+}}
+
+// strictJSONKeys walks raw token by token: it must be exactly one object
+// followed by end of input, no object anywhere may repeat a key, and the
+// objects shape describes may hold only its keys, in their exact case
+// (encoding/json alone matches field names case-insensitively and lets
+// a later duplicate win).
+func strictJSONKeys(raw []byte, shape *jsonShape) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if t, err := dec.Token(); err != nil {
+		return err
+	} else if t != json.Delim('{') {
+		return errors.New("not a JSON object")
+	}
+	if err := walkObject(dec, shape, ""); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		if err == nil {
+			return errors.New("more than one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func walkObject(dec *json.Decoder, shape *jsonShape, path string) error {
+	seen := map[string]bool{}
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		k, _ := t.(string)
+		if seen[k] {
+			return fmt.Errorf("duplicate key %q%s", k, path)
+		}
+		seen[k] = true
+		var child *jsonShape
+		if shape != nil && shape.fields != nil {
+			c, ok := shape.fields[k]
+			if !ok {
+				return fmt.Errorf("unknown key %q%s (keys are matched in their exact case)", k, path)
+			}
+			child = c
+		}
+		if err := walkValue(dec, child, " in "+k); err != nil {
+			return err
+		}
+	}
+	_, err := dec.Token() // '}'
+	return err
+}
+
+func walkValue(dec *json.Decoder, shape *jsonShape, path string) error {
+	t, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	switch t {
+	case json.Delim('{'):
+		return walkObject(dec, shape, path)
+	case json.Delim('['):
+		for dec.More() {
+			if err := walkValue(dec, nil, path); err != nil {
+				return err
+			}
+		}
+		_, err := dec.Token() // ']'
+		return err
+	}
+	return nil
 }
 
 // fenceOpen reports whether line opens a fenced code block (CommonMark:
@@ -604,4 +803,24 @@ func fenceOpen(line string) (fence, info string, ok bool) {
 		info = f[0]
 	}
 	return t[:n], info, true
+}
+
+// fenceClose reports whether line, apart from its indentation, is a
+// closing fence for fence (the same character, at least as many, nothing
+// else), and its indentation (a tab counts as four spaces).
+func fenceClose(line, fence string) (indent int, ok bool) {
+	i := 0
+	for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+		if line[i] == '\t' {
+			indent += 4
+		} else {
+			indent++
+		}
+		i++
+	}
+	t := line[i:]
+	if len(t) < len(fence) || strings.Trim(t, fence[:1]) != "" {
+		return indent, false
+	}
+	return indent, true
 }
