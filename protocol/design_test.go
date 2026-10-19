@@ -57,7 +57,7 @@ func TestPlanDesign(t *testing.T) {
 	}
 }
 
-// TestContractDesign pins the contract design's pin fields (SDK v0.7.2):
+// TestContractDesign pins the contract design's pin fields (SDK v0.8.0):
 // the served revision, whether it is the unit's pin, and the plan's
 // current revision. Older contracts decode with the fields zero.
 func TestContractDesign(t *testing.T) {
@@ -76,7 +76,7 @@ func TestContractDesign(t *testing.T) {
 	if !d.Superseded() {
 		t.Fatal("a pinned design whose digest differs from the current one is superseded")
 	}
-	if p := d.Pin(); p != (DesignPin{Revision: 2, Digest: "sha256:a"}) {
+	if p := d.Pin(); p == nil || *p != (DesignPin{Revision: 2, Digest: "sha256:a"}) {
 		t.Fatalf("pin %+v", p)
 	}
 
@@ -95,6 +95,15 @@ func TestContractDesign(t *testing.T) {
 	d, err = old.Design()
 	if err != nil || d == nil || d.Pinned || d.CurrentRevision != 0 || d.CurrentDigest != "" || d.Superseded() {
 		t.Fatalf("pre-pinning contract design %+v (%v)", d, err)
+	}
+
+	// A contract without a design: nil, and the methods are nil-safe.
+	var none *ContractDesign
+	if none.Superseded() || none.Pin() != nil {
+		t.Fatal("a nil design is not superseded and has no pin")
+	}
+	if b, _ := json.Marshal(ContractDesign{}); strings.Contains(string(b), "pinned") || strings.Contains(string(b), "current_") {
+		t.Fatalf("unpinned fields are omitted: %s", b)
 	}
 
 	// Round trip: the fields encode flat, beside the plan design's.

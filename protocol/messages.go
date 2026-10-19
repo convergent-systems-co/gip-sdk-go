@@ -305,8 +305,9 @@ type HostContractResult struct {
 }
 
 // Design returns the plan design the contract carries: the document the
-// unit is built and reviewed to (SDK v0.7.0). Since v0.7.2 it is a
-// ContractDesign, which embeds the PlanDesign (so Content, Revision,
+// unit is built and reviewed to (SDK v0.7.0). Since v0.8.0 it is a
+// ContractDesign (a source-breaking change of the return type, hence the
+// minor version), which embeds the PlanDesign (so Content, Revision,
 // Digest, ... read as before) and adds whether the served revision is the
 // unit's pin and which revision is current. It is nil when the plan has no
 // design, or the gip predates it.
@@ -324,7 +325,7 @@ func (r *HostContractResult) Design() (*ContractDesign, error) {
 }
 
 // ContractDesign is the design revision a work contract serves (SDK
-// v0.7.2). Pinned says the revision is the one the unit was started on
+// v0.8.0). Pinned says the revision is the one the unit was started on
 // (work.start pins it; rework keeps the pin); CurrentRevision and
 // CurrentDigest name the plan's current design. After a ledger merge two
 // texts can share a revision number, so compare digests, not numbers
@@ -332,22 +333,25 @@ func (r *HostContractResult) Design() (*ContractDesign, error) {
 // three: Pinned is false and CurrentRevision and CurrentDigest are zero.
 type ContractDesign struct {
 	PlanDesign
-	Pinned          bool   `json:"pinned"`
+	Pinned          bool   `json:"pinned,omitempty"`
 	CurrentRevision int    `json:"current_revision,omitempty"`
 	CurrentDigest   string `json:"current_digest,omitempty"`
 }
 
 // Pin returns the served revision as a DesignPin (the shape PlanWork.Design
-// carries).
-func (d *ContractDesign) Pin() DesignPin {
-	return DesignPin{Revision: d.Revision, Digest: d.Digest}
+// carries); nil for a nil design (a contract without one).
+func (d *ContractDesign) Pin() *DesignPin {
+	if d == nil {
+		return nil
+	}
+	return &DesignPin{Revision: d.Revision, Digest: d.Digest}
 }
 
 // Superseded reports whether the served design is no longer the plan's
 // current one: its digest differs from CurrentDigest. It is false when the
-// gip did not say which design is current.
+// gip did not say which design is current, and for a nil design.
 func (d *ContractDesign) Superseded() bool {
-	return d.CurrentDigest != "" && d.Digest != d.CurrentDigest
+	return d != nil && d.CurrentDigest != "" && d.Digest != d.CurrentDigest
 }
 
 // Act kinds an executor may request.
