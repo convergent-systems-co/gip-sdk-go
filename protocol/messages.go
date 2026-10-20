@@ -350,10 +350,18 @@ func (r *HostContractResult) Review() (*ContractReview, error) {
 // review_rejection_cap (default 3): once Rejections reaches it, a
 // builder or the reviewer may record a FindingKindRescope finding.
 // Rescopes counts the lineage's re-scopes and splits: one is allowed.
+// Unreviewable rejections (HostActParams.Unreviewable) never count
+// toward Rejections.
 type ContractReview struct {
 	Rejections   int `json:"rejections"`
 	RejectionCap int `json:"rejection_cap"`
 	Rescopes     int `json:"rescopes"`
+	// LastUnreviewable (SDK v0.9.2, gip ADR-0024 §8) is the reason, one of
+	// UnreviewableReasons, when the unit's latest decided review was an
+	// unreviewable rejection. The builder should resubmit the same work
+	// from a reachable, clean workspace rather than rework it. Empty
+	// otherwise, and from a gip that predates it.
+	LastUnreviewable string `json:"last_unreviewable,omitempty"`
 }
 
 // AtCap reports whether the unit's rejections reached the cap, so a
@@ -472,8 +480,11 @@ const (
 )
 
 // MaxUnreviewable is how many unreviewable rejections of a work unit
-// since its last approved review gip excuses from review.rejections
-// (gip ADR-0024 §8); each later one counts as an ordinary rejection.
+// gip accepts since its last approved review (gip ADR-0024 §8). None of
+// them ever counts toward review.rejections; once MaxUnreviewable have
+// been recorded, a further one raises a blocking class-decision question
+// (unreviewable-exhausted) at the unit's plan node for a person
+// to answer.
 const MaxUnreviewable = 2
 
 // UnreviewableReasons returns the closed set of unreviewable reasons.
@@ -576,12 +587,14 @@ type HostActParams struct {
 	// reach. The unit returns to its builder to resubmit, as for any
 	// rejection, but the rejection is not a defect: it does not count
 	// toward the contract's review.rejections (ContractReview), so it
-	// never brings the unit to the re-scope cap. Rationale still says
-	// what was missing. To keep a reviewer from hiding defects this way,
-	// only the first MaxUnreviewable such rejections of a unit since its
-	// last approval are excused; later ones count. Omitted when empty; a
-	// gip built against an earlier SDK ignores it and counts the
-	// rejection.
+	// never brings the unit to the re-scope cap or spends the lineage's
+	// re-scope. gip does not verify the reason; Rationale still says
+	// what was missing. Unreviewable rejections never count; after
+	// MaxUnreviewable of them since the unit's last approval, a further
+	// one raises a blocking class-decision question
+	// (unreviewable-exhausted) at the unit's plan node for a person to
+	// answer. Omitted when empty; an older gip ignores it, and refuses
+	// ledgers containing decision.unreviewable.
 	Unreviewable string `json:"unreviewable,omitempty"`
 	// Evidence, on review, optionally names evidence records the
 	// decision relies on (and on goal.qualify and goal.accept, the goal's).
