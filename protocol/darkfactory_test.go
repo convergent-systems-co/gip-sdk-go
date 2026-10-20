@@ -287,6 +287,29 @@ func TestContractReview(t *testing.T) {
 	}
 	var back ContractReview
 	strict(t, `{"rejections":0,"rejection_cap":3,"rescopes":1}`, &back)
+	if back.LastUnreviewable != "" {
+		t.Fatalf("no last_unreviewable: %+v", back)
+	}
+}
+
+// TestContractReviewLastUnreviewable (SDK v0.9.2, gip ADR-0024 §8): the
+// review block names the reason when the latest decided review was an
+// unreviewable rejection, so the builder resubmits rather than reworks.
+func TestContractReviewLastUnreviewable(t *testing.T) {
+	r := HostContractResult{Contract: json.RawMessage(`{"schema":"gip.work-contract/v1","review":{"rejections":0,"rejection_cap":3,"rescopes":0,"last_unreviewable":"workspace-changed"}}`)}
+	v, err := r.Review()
+	if err != nil || v == nil || v.LastUnreviewable != UnreviewableWorkspaceChanged || v.Rejections != 0 || v.AtCap() {
+		t.Fatalf("review %+v (%v)", v, err)
+	}
+	if !IsUnreviewableReason(v.LastUnreviewable) {
+		t.Fatalf("last_unreviewable %q is one of UnreviewableReasons", v.LastUnreviewable)
+	}
+	var back ContractReview
+	strict(t, `{"rejections":1,"rejection_cap":3,"rescopes":0,"last_unreviewable":"commit-unknown"}`, &back)
+	if back.LastUnreviewable != UnreviewableCommitUnknown {
+		t.Fatalf("round trip %+v", back)
+	}
+	encodes(t, ContractReview{RejectionCap: 3}, nil, "last_unreviewable")
 }
 
 // TestProjectSettings pins the settings payload and its defaults.
