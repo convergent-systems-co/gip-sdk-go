@@ -121,6 +121,8 @@ func (r *Request) Contract(ctx context.Context, work string, out any) (string, e
 // its target (HostActParams.ValidateTarget), or names an unreviewable
 // reason other than on a review rejection
 // (HostActParams.ValidateUnreviewable), is an error and is not sent.
+// The rationale is sent with its newlines normalised to LF
+// (protocol.NormalizeNewlines), since gip refuses a CR in it.
 func (r *Request) Act(ctx context.Context, p protocol.HostActParams) (*protocol.HostActResult, error) {
 	if err := p.ValidateTarget(); err != nil {
 		return nil, err
@@ -128,6 +130,7 @@ func (r *Request) Act(ctx context.Context, p protocol.HostActParams) (*protocol.
 	if err := p.ValidateUnreviewable(); err != nil {
 		return nil, err
 	}
+	p.Rationale = protocol.NormalizeNewlines(p.Rationale)
 	var out protocol.HostActResult
 	if err := r.session.call(ctx, protocol.MethodHostAct, p, &out); err != nil {
 		return nil, err

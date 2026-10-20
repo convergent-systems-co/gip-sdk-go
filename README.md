@@ -75,6 +75,7 @@ In dark factory mode an independent agent reviewer decides each unit's review (A
 - A ceremony that is not a review of `Work`, or does not exist, is refused before anything is submitted; one already decided is refused by the gateway (`ILLEGAL_TRANSITION`).
 - (v0.9.1, gip ADR-0024 §8) A reviewer that cannot review a submission at all rejects it with `Unreviewable` set to a reason from a closed set (`UnreviewableReasons`): `commit-unknown`, `workspace-changed`, `submitted-elsewhere`. gip does not verify the reason. The unit returns to its builder to resubmit; the rejection is not a defect and never counts toward the contract's `review.rejections`, so it never reaches the re-scope cap or spends the lineage's re-scope. After `MaxUnreviewable` (2) such rejections since the unit's last approval, a further one raises a blocking class decision question (`unreviewable-exhausted`) at the unit's plan node for a person to answer. `Unreviewable` is valid only with `Outcome` `reject` (`ValidateUnreviewable`; `Act` refuses to send otherwise). Acts sent to an older gip ignore the field; an older gip refuses ledgers containing `decision.unreviewable`.
 - The decision is recorded as the agent's own, with no human attestation.
+- (v0.9.3) gip refuses a carriage return in a rationale; `Act` normalises `Rationale` (CRLF, then lone CR, to LF) before sending, and `protocol.NormalizeNewlines` exposes the same rewrite.
 
 ### Front-loaded planning (v0.7.0)
 
