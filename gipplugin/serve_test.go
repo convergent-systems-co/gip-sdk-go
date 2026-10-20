@@ -190,3 +190,67 @@ func TestActAndCheckValidateTheirTarget(t *testing.T) {
 		}
 	}
 }
+
+// TestActNormalisesRationaleNewlines: Act sends the rationale with CRLF
+// and lone CR rewritten to LF, since gip refuses a CR in it.
+func TestActNormalisesRationaleNewlines(t *testing.T) {
+	hostIn, pluginOut := io.Pipe()
+	pluginIn, hostOut := io.Pipe()
+	handler := func(ctx context.Context, r *Request) (*protocol.InvokeResult, error) {
+		_, err := r.Act(ctx, protocol.HostActParams{Kind: protocol.ActReview, Work: "w", As: "agent:r", Ceremony: "c", Outcome: protocol.ReviewReject, Rationale: "first\r\nsecond\rthird\n"})
+		if err != nil {
+			return nil, err
+		}
+		return &protocol.InvokeResult{Text: "ok"}, nil
+	}
+	done := make(chan int, 1)
+	go func() {
+		done <- ServeIO(context.Background(), []byte(testManifest), Handlers{"t run": handler}, pluginIn, pluginOut)
+	}()
+	host := protocol.NewConn(hostIn, hostOut)
+	send := func(m *protocol.Message) {
+		if err := host.Write(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	init, _ := protocol.Request(1, protocol.MethodInitialize, protocol.InitializeParams{ProtocolVersions: []int{1}, GrantedPermissions: []string{"work.read", "work.execute"}})
+	send(init)
+	if m, err := host.Read(); err != nil || m.Error != nil {
+		t.Fatalf("initialize: %+v %v", m, err)
+	}
+	inv, _ := protocol.Request(2, protocol.MethodInvoke, protocol.InvokeParams{Command: []string{"t", "run"}, Arguments: map[string]any{}})
+	send(inv)
+	sawAct := false
+	for {
+		m, err := host.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch m.Method {
+		case protocol.MethodHostAct:
+			var p protocol.HostActParams
+			if err := json.Unmarshal(m.Params, &p); err != nil {
+				t.Fatal(err)
+			}
+			if p.Rationale != "first\nsecond\nthird\n" {
+				t.Fatalf("rationale sent %q, want CR normalised to LF", p.Rationale)
+			}
+			sawAct = true
+			resp, _ := protocol.Response(m.ID, protocol.HostActResult{})
+			send(resp)
+		case "":
+			if m.Error != nil {
+				t.Fatalf("invoke failed: %v", m.Error)
+			}
+			if !sawAct {
+				t.Fatal("Act was not sent")
+			}
+			sd, _ := protocol.Notification(protocol.MethodShutdown, struct{}{})
+			send(sd)
+			if code := <-done; code != 0 {
+				t.Fatalf("exit %d", code)
+			}
+			return
+		}
+	}
+}

@@ -604,6 +604,17 @@ type HostActParams struct {
 	Goal string `json:"goal,omitempty"`
 }
 
+// NormalizeNewlines rewrites each CRLF, then each remaining lone CR, to
+// LF. gip refuses a carriage return in a ceremony or review rationale,
+// and its CLI and executor host normalise a rationale this way before
+// signing; Request.Act (SDK v0.9.3) applies it to
+// HostActParams.Rationale before sending, so a rationale written on
+// Windows or pasted from a CRLF source is accepted. Text without a CR
+// is returned unchanged.
+func NormalizeNewlines(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
+}
+
 // IsGoalAct reports whether kind acts on a goal (ActGoalQualify,
 // ActGoalAccept) rather than a work unit.
 func IsGoalAct(kind string) bool { return kind == ActGoalQualify || kind == ActGoalAccept }
