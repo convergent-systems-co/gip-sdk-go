@@ -118,9 +118,14 @@ func (r *Request) Contract(ctx context.Context, work string, out any) (string, e
 // principal. Requires work.execute; the review kind requires work.review
 // and the goal.qualify and goal.accept kinds work.deliver instead. A
 // refusal is a result, not an error; an act that does not name exactly
-// its target (HostActParams.ValidateTarget) is an error and is not sent.
+// its target (HostActParams.ValidateTarget), or names an unreviewable
+// reason other than on a review rejection
+// (HostActParams.ValidateUnreviewable), is an error and is not sent.
 func (r *Request) Act(ctx context.Context, p protocol.HostActParams) (*protocol.HostActResult, error) {
 	if err := p.ValidateTarget(); err != nil {
+		return nil, err
+	}
+	if err := p.ValidateUnreviewable(); err != nil {
 		return nil, err
 	}
 	var out protocol.HostActResult

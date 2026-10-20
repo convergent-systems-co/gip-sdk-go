@@ -45,3 +45,46 @@ func TestReviewAct(t *testing.T) {
 		t.Fatal("a command cannot use work.review the plugin does not declare")
 	}
 }
+
+// TestUnreviewableReview (SDK v0.9.1, gip ADR-0024 §8): a reviewer that
+// cannot review a submission rejects it with a reason from a closed set;
+// gip does not count it toward review.rejections (up to MaxUnreviewable
+// since the unit's last approval).
+func TestUnreviewableReview(t *testing.T) {
+	if UnreviewableCommitUnknown != "commit-unknown" || UnreviewableWorkspaceChanged != "workspace-changed" || UnreviewableSubmittedElsewhere != "submitted-elsewhere" || MaxUnreviewable != 2 {
+		t.Fatal("the unreviewable reasons and their bound are part of the protocol")
+	}
+	if got := UnreviewableReasons(); len(got) != 3 {
+		t.Fatalf("three reasons: %v", got)
+	}
+	p := HostActParams{Kind: ActReview, Work: "w", As: "agent:reviewer", Ceremony: "cer-1", Outcome: ReviewReject, Rationale: "commit abc123 is not in my clone", Unreviewable: UnreviewableCommitUnknown}
+	if err := p.ValidateUnreviewable(); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(p)
+	if !strings.Contains(string(b), `"unreviewable":"commit-unknown"`) {
+		t.Fatalf("on the wire: %s", b)
+	}
+	var back HostActParams
+	if err := json.Unmarshal(b, &back); err != nil || back.Unreviewable != UnreviewableCommitUnknown {
+		t.Fatalf("round trip: %+v %v", back, err)
+	}
+	b, _ = json.Marshal(HostActParams{Kind: ActReview, Work: "w", As: "agent:r", Ceremony: "c", Outcome: ReviewReject, Rationale: "a defect"})
+	if strings.Contains(string(b), "unreviewable") {
+		t.Fatalf("an ordinary rejection carries no unreviewable: %s", b)
+	}
+	for _, bad := range []HostActParams{
+		{Kind: ActReview, Outcome: ReviewApprove, Unreviewable: UnreviewableCommitUnknown},
+		{Kind: ActSubmit, Unreviewable: UnreviewableWorkspaceChanged},
+		{Kind: ActReview, Outcome: ReviewReject, Unreviewable: "defective"},
+	} {
+		if bad.ValidateUnreviewable() == nil {
+			t.Fatalf("refused: %+v", bad)
+		}
+	}
+	for _, r := range UnreviewableReasons() {
+		if !IsUnreviewableReason(r) {
+			t.Fatal(r)
+		}
+	}
+}

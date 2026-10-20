@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -454,6 +455,53 @@ const (
 	ReviewReject  = "reject"
 )
 
+// Unreviewable reasons (HostActParams.Unreviewable, SDK v0.9.1): why a
+// reviewer could not review a submission. The set is closed: gip refuses
+// any other value (INVALID_PAYLOAD).
+const (
+	// UnreviewableCommitUnknown: the reviewer has no record of the
+	// submitted commit (it is not in the repository the reviewer reads).
+	UnreviewableCommitUnknown = "commit-unknown"
+	// UnreviewableWorkspaceChanged: the worktree the work was submitted
+	// from was moved or removed, or is dirty, so what was submitted
+	// cannot be identified.
+	UnreviewableWorkspaceChanged = "workspace-changed"
+	// UnreviewableSubmittedElsewhere: the work was submitted from a
+	// workspace or installation the reviewer cannot reach.
+	UnreviewableSubmittedElsewhere = "submitted-elsewhere"
+)
+
+// MaxUnreviewable is how many unreviewable rejections of a work unit
+// since its last approved review gip excuses from review.rejections
+// (gip ADR-0024 §8); each later one counts as an ordinary rejection.
+const MaxUnreviewable = 2
+
+// UnreviewableReasons returns the closed set of unreviewable reasons.
+func UnreviewableReasons() []string {
+	return []string{UnreviewableCommitUnknown, UnreviewableWorkspaceChanged, UnreviewableSubmittedElsewhere}
+}
+
+// IsUnreviewableReason reports whether reason is one of
+// UnreviewableReasons.
+func IsUnreviewableReason(reason string) bool {
+	return slices.Contains(UnreviewableReasons(), reason)
+}
+
+// ValidateUnreviewable checks that Unreviewable is empty, or is a known
+// reason on a review rejection (ActReview, ReviewReject). Request.Act
+// calls it before sending.
+func (p *HostActParams) ValidateUnreviewable() error {
+	switch {
+	case p.Unreviewable == "":
+		return nil
+	case p.Kind != ActReview || p.Outcome != ReviewReject:
+		return fmt.Errorf("unreviewable applies only to a review rejection (kind %q, outcome %q)", p.Kind, p.Outcome)
+	case !IsUnreviewableReason(p.Unreviewable):
+		return fmt.Errorf("unknown unreviewable reason %q (one of %s)", p.Unreviewable, strings.Join(UnreviewableReasons(), ", "))
+	}
+	return nil
+}
+
 // Lease states.
 const (
 	LeaseActive  = "active"
@@ -520,6 +568,21 @@ type HostActParams struct {
 	Ceremony string `json:"ceremony,omitempty"`
 	// Outcome, on review, is ReviewApprove or ReviewReject.
 	Outcome string `json:"outcome,omitempty"`
+	// Unreviewable, on a review with Outcome ReviewReject (SDK v0.9.1,
+	// gip ADR-0024 §8), says the reviewer could not review the submission
+	// at all, and why, from a closed set (UnreviewableReasons): it has no
+	// record of the submitted commit, the submission's worktree moved or
+	// is dirty, or the work was submitted from a workspace it cannot
+	// reach. The unit returns to its builder to resubmit, as for any
+	// rejection, but the rejection is not a defect: it does not count
+	// toward the contract's review.rejections (ContractReview), so it
+	// never brings the unit to the re-scope cap. Rationale still says
+	// what was missing. To keep a reviewer from hiding defects this way,
+	// only the first MaxUnreviewable such rejections of a unit since its
+	// last approval are excused; later ones count. Omitted when empty; a
+	// gip built against an earlier SDK ignores it and counts the
+	// rejection.
+	Unreviewable string `json:"unreviewable,omitempty"`
 	// Evidence, on review, optionally names evidence records the
 	// decision relies on (and on goal.qualify and goal.accept, the goal's).
 	Evidence []string `json:"evidence,omitempty"`

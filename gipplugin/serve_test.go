@@ -179,4 +179,14 @@ func TestActAndCheckValidateTheirTarget(t *testing.T) {
 	if _, err := r.Check(context.Background(), protocol.HostCheckParams{Work: "w", Subject: "goal:g", Predicate: "p", As: "agent:r"}); err == nil {
 		t.Fatal("a check naming both work and subject is refused")
 	}
+	// An unreviewable reason outside a review rejection, or outside the
+	// closed set, is not sent (a nil session would panic if it were).
+	for _, p := range []protocol.HostActParams{
+		{Kind: protocol.ActReview, Work: "w", As: "agent:r", Ceremony: "c", Outcome: protocol.ReviewApprove, Unreviewable: protocol.UnreviewableCommitUnknown},
+		{Kind: protocol.ActReview, Work: "w", As: "agent:r", Ceremony: "c", Outcome: protocol.ReviewReject, Unreviewable: "looks-wrong"},
+	} {
+		if _, err := r.Act(context.Background(), p); err == nil {
+			t.Fatalf("an invalid unreviewable act is refused before sending: %+v", p)
+		}
+	}
 }
