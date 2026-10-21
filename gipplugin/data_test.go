@@ -32,7 +32,17 @@ func (h *memHost) answer(m *protocol.Message) *protocol.Message {
 	mismatch := func() *protocol.Message {
 		return protocol.ErrorResponse(m.ID, protocol.NewError(protocol.CodeDataRefused, protocol.CodeDataVersionMismatch, "version mismatch"))
 	}
-	cas := func(key string, want *int64) bool { return want == nil || h.vers[key] == *want }
+	// Versions are monotonic per key across delete (h.vers is the
+	// high-water mark); IfVersion 0 matches an absent key.
+	cas := func(key string, want *int64) bool {
+		if want == nil {
+			return true
+		}
+		if _, ok := h.vals[key]; !ok {
+			return *want == 0
+		}
+		return h.vers[key] == *want
+	}
 	var res any
 	switch m.Method {
 	case protocol.MethodHostPluginDataGet:
@@ -199,6 +209,15 @@ func TestPluginData(t *testing.T) {
 		}
 		if ok, err := r.DataDelete(ctx, "lease/w-1", nil); err != nil || ok {
 			t.Errorf("delete absent: %v %v", ok, err)
+		}
+		// Re-created after a delete: version 1 and 2 never come back, so
+		// a stale compare-and-swap cannot match.
+		if _, err := r.DataPut(ctx, "lease/w-1", []byte("stale"), protocol.IfVersion(1)); !protocol.IsVersionMismatch(err) {
+			t.Errorf("stale cas on a deleted key: %v", err)
+		}
+		v3, err := r.DataPut(ctx, "lease/w-1", []byte("again"), protocol.IfVersion(0))
+		if err != nil || v3 <= v2 {
+			t.Errorf("re-create must continue above version %d: %d %v", v2, v3, err)
 		}
 		return &protocol.InvokeResult{Text: "ok"}, nil
 	}

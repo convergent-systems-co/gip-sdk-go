@@ -125,7 +125,7 @@ gip ADR-0025 (batch C) gives a plugin a private key-value store and moves grant,
 | Method | `Request` helper | Purpose |
 |---|---|---|
 | `host/plugin/data/get {key}` | `DataGet`, `DataGetJSON` | The value and its `version`; a missing key is `Found: false`, not an error. |
-| `host/plugin/data/put {key, value, if_version?}` | `DataPut`, `DataPutJSON` | Write and return the new `version` (every write raises it). `if_version` is a compare-and-swap: absent writes unconditionally, `protocol.IfVersion(0)` only creates, `protocol.IfVersion(n)` replaces only version n. |
+| `host/plugin/data/put {key, value, if_version?}` | `DataPut`, `DataPutJSON` | Write and return the new `version` (every write raises it). `if_version` is a compare-and-swap: absent writes unconditionally, `protocol.IfVersion(0)` only creates, `protocol.IfVersion(n)` replaces only version n. Versions are never reused: they are monotonic per (plugin, project, key) across delete and re-create (the host keeps a high-water mark), so a stale `if_version` never matches a re-created key. |
 | `host/plugin/data/delete {key, if_version?}` | `DataDelete` | Delete; reports whether the key existed. `if_version` as for put. |
 | `host/plugin/data/list {prefix?, after?, limit?}` | `DataList` | One page of keys in byte order (`key`, `version`, `size`, no values); pass `next` as the next page's `after`. |
 
@@ -134,9 +134,11 @@ gip ADR-0025 (batch C) gives a plugin a private key-value store and moves grant,
 | Key: 1 to 200 bytes of printable ASCII (0x20 to 0x7E) | `MaxPluginDataKeyBytes` |
 | Value: at most 1 MiB (raw bytes; base64 on the wire) | `MaxPluginDataValueBytes` |
 | Per plugin per project: 4,096 keys and 64 MiB (host-enforced) | `MaxPluginDataKeys`, `MaxPluginDataBytes` |
-| List page: default 256, at most 1024 (SDK-proposed; the host clamps) | `DefaultPluginDataListLimit`, `MaxPluginDataListLimit` |
+| List page: default 256, at most 1024 (contract core H implements) | `DefaultPluginDataListLimit`, `MaxPluginDataListLimit` |
 
 The helpers refuse locally, sending nothing, when `plugin-data` was not granted (`host.permission_denied`) or a key, value, prefix, cursor, limit or `if_version` breaks the limits (`DATA_KEY_INVALID`, `DATA_VALUE_TOO_LARGE`, `DATA_LIMIT_INVALID`, all `CodeInvalidParams`); each `Validate` method is the same check, for hosts and parity tests. The host refuses with code `CodeDataRefused` (-31004) and the stable ids `DATA_VERSION_MISMATCH` (compare-and-swap failed, nothing written), `DATA_QUOTA_EXCEEDED` and `NO_PROJECT`. Match them with `protocol.IsVersionMismatch`, `protocol.IsNoProject` (which also accepts the older `host.unavailable`) and `protocol.ErrorID`. A gip that predates plugin data answers the methods with method-not-found.
+
+Beyond the PLG-028 text, this SDK fixes the contract core H implements on the host side: the ids `NO_PROJECT` and `DATA_QUOTA_EXCEEDED` with code `CodeDataRefused` (-31004), the invalid-request ids above, the list page sizes, `if_version` 0 as create-only (matches a key that was never written or was deleted), and versions that are never reused for a key.
 
 **Children never get the channel.** The JSON-RPC channel (stdin and stdout) is the only way to the host, so a process the plugin starts must not inherit it. `gipplugin.Command` returns an `exec.Cmd` whose stdin and stdout are the null device (stderr is the plugin's); `gipplugin.CheckChild` returns `ErrChildInheritsChannel` for a command that would pass `os.Stdin` or `os.Stdout` as a stream or extra file. Use them for every process you start, model processes above all.
 

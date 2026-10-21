@@ -27,6 +27,19 @@ import (
 // the host would refuse for its shape is an error and is not sent; the
 // host's own check is authoritative, and only the host enforces the
 // per-project quotas.
+//
+// Versions are never reused. A key's version is monotonic per plugin,
+// project and key across delete and re-create: the host keeps a
+// high-water mark for a deleted key, and a re-created key continues above
+// it. A stale IfVersion therefore never matches a key that was deleted
+// and written again (no ABA).
+//
+// Contract core H implements (SDK v0.10.0; beyond the PLG-028 text, agreed
+// for gip's host side): the refusal ids NO_PROJECT and DATA_QUOTA_EXCEEDED
+// with error code CodeDataRefused (-31004), the invalid-request ids
+// DATA_KEY_INVALID, DATA_VALUE_TOO_LARGE and DATA_LIMIT_INVALID, the list
+// page sizes DefaultPluginDataListLimit and MaxPluginDataListLimit,
+// IfVersion 0 meaning create-only, and versions never reused.
 const (
 	MethodHostPluginDataGet    = "host/plugin/data/get"    // plugin -> host, request (plugin-data)
 	MethodHostPluginDataPut    = "host/plugin/data/put"    // plugin -> host, request (plugin-data)
@@ -53,7 +66,8 @@ const (
 	MaxPluginDataBytes      = 64 << 20 // 64 MiB per plugin per project
 	// DefaultPluginDataListLimit is the page size of a list without a
 	// limit, and MaxPluginDataListLimit the largest page a list may ask
-	// for (SDK-proposed bounds; the host clamps to its own).
+	// for (the contract core H implements; a larger limit is
+	// DATA_LIMIT_INVALID).
 	DefaultPluginDataListLimit = 256
 	MaxPluginDataListLimit     = 1024
 )
@@ -66,7 +80,7 @@ const (
 	// key exists when IfVersion is 0). Nothing was written; read the key
 	// again and retry. Error code CodeDataRefused.
 	CodeDataVersionMismatch = "DATA_VERSION_MISMATCH"
-	// CodeDataQuotaExceeded: the put would take the plugin past
+	// CodeDataQuotaExceeded (contract core H implements): the put would take the plugin past
 	// MaxPluginDataKeys keys or MaxPluginDataBytes bytes in the project.
 	// Nothing was written. Error code CodeDataRefused.
 	CodeDataQuotaExceeded = "DATA_QUOTA_EXCEEDED"
@@ -81,7 +95,7 @@ const (
 	// MaxPluginDataListLimit, or IfVersion is negative. Error code
 	// CodeInvalidParams.
 	CodeDataLimitInvalid = "DATA_LIMIT_INVALID"
-	// CodeNoProject: no project is open, so there is no namespace to read
+	// CodeNoProject (contract core H implements): no project is open, so there is no namespace to read
 	// or write. Error code CodeDataRefused. A gip that predates plugin data
 	// reports this condition for other methods as host.unavailable
 	// (IsNoProject accepts both).
@@ -94,7 +108,7 @@ const (
 	ErrorIDPermissionDenied = "host.permission_denied"
 )
 
-// CodeDataRefused (-31004) is the JSON-RPC error code of a plugin data
+// CodeDataRefused (-31004; contract core H implements) is the JSON-RPC error code of a plugin data
 // request the host understood and refused: DATA_VERSION_MISMATCH,
 // DATA_QUOTA_EXCEEDED and NO_PROJECT.
 const CodeDataRefused = -31004
@@ -115,9 +129,14 @@ type PluginDataGetResult struct {
 
 // PluginDataPutParams writes one key. IfVersion makes it a
 // compare-and-swap: nil writes unconditionally, 0 writes only when the key
-// does not exist (create), and n > 0 writes only when the key's current
-// version is n. A mismatch is DATA_VERSION_MISMATCH and writes nothing.
-// An empty Value is a valid value.
+// does not exist, never written or deleted (create-only; contract core H
+// implements), and n > 0 writes only when the key's current version is n.
+// A mismatch is DATA_VERSION_MISMATCH and writes nothing. An empty Value is
+// a valid value.
+//
+// Versions are never reused: they are monotonic per plugin, project and
+// key across delete and re-create (the host keeps a high-water mark), so
+// a version read before a delete never matches the re-created key.
 type PluginDataPutParams struct {
 	Key       string `json:"key"`
 	Value     []byte `json:"value"`
@@ -125,7 +144,8 @@ type PluginDataPutParams struct {
 }
 
 // PluginDataPutResult is the key's version after the write: every write
-// raises it, and it is always positive.
+// raises it, it is always positive, and it is above every version the key
+// had before, deletions included.
 type PluginDataPutResult struct {
 	Version int64 `json:"version"`
 }
@@ -169,7 +189,9 @@ type PluginDataListResult struct {
 	Next    string            `json:"next,omitempty"`
 }
 
-// IfVersion returns a pointer to v, for the IfVersion of a put or delete.
+// IfVersion returns a pointer to v, for the IfVersion of a put or delete:
+// IfVersion(0) is create-only, IfVersion(n) matches only current version
+// n. A version is never reused for the same key, even after a delete.
 func IfVersion(v int64) *int64 { return &v }
 
 // ValidPluginDataKey reports why key is not a valid plugin data key: it
