@@ -20,6 +20,7 @@ const dataManifest = `{"schema":"gip.plugin-manifest/v1","name":"gip-plugin-t","
 type memHost struct {
 	vals      map[string][]byte
 	vers      map[string]int64
+	seq       int64
 	noProject bool
 	calls     []string
 }
@@ -32,8 +33,8 @@ func (h *memHost) answer(m *protocol.Message) *protocol.Message {
 	mismatch := func() *protocol.Message {
 		return protocol.ErrorResponse(m.ID, protocol.NewError(protocol.CodeDataRefused, protocol.CodeDataVersionMismatch, "version mismatch"))
 	}
-	// Versions are monotonic per key across delete (h.vers is the
-	// high-water mark); IfVersion 0 matches an absent key.
+	// Versions come from one counter per namespace (h.seq); IfVersion 0
+	// matches an absent key.
 	cas := func(key string, want *int64) bool {
 		if want == nil {
 			return true
@@ -60,7 +61,8 @@ func (h *memHost) answer(m *protocol.Message) *protocol.Message {
 			return mismatch()
 		}
 		h.vals[p.Key] = p.Value
-		h.vers[p.Key]++
+		h.seq++
+		h.vers[p.Key] = h.seq
 		res = protocol.PluginDataPutResult{Version: h.vers[p.Key]}
 	case protocol.MethodHostPluginDataDelete:
 		var p protocol.PluginDataDeleteParams
@@ -177,7 +179,7 @@ func TestPluginData(t *testing.T) {
 			t.Error(err)
 		}
 		var mm memo
-		if v, err := r.DataGetJSON(ctx, "memo/w-1", &mm); err != nil || v != 1 || mm.Notes[0] != "a" {
+		if v, err := r.DataGetJSON(ctx, "memo/w-1", &mm); err != nil || v <= v2 || mm.Notes[0] != "a" {
 			t.Errorf("json: %d %+v %v", v, mm, err)
 		}
 		for _, k := range []string{"lease/w-2", "lease/w-3"} {
@@ -203,6 +205,9 @@ func TestPluginData(t *testing.T) {
 		note("list=" + strings.Join(keys, ","))
 		if _, err := r.DataDelete(ctx, "lease/w-1", protocol.IfVersion(1)); !protocol.IsVersionMismatch(err) {
 			t.Errorf("stale delete: %v", err)
+		}
+		if _, err := r.DataDelete(ctx, "lease/w-1", protocol.IfVersion(0)); !protocol.IsVersionMismatch(err) {
+			t.Errorf("if_version 0 on an existing key: %v", err)
 		}
 		if ok, err := r.DataDelete(ctx, "lease/w-1", protocol.IfVersion(2)); err != nil || !ok {
 			t.Errorf("delete: %v %v", ok, err)

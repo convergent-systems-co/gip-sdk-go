@@ -23,8 +23,9 @@ const RulesAgentAuthority = 3
 
 // HumanOnlyActions returns the acts reserved to a person under the given
 // rules epoch, as gip's governance lists them (ADR-0024 §1, ADR-0025 D1) (for display
-// and parity tests; gip's own list is authoritative). Unknown epochs
-// return nil.
+// and parity tests; gip's own list is authoritative, and once core pins
+// this function in its parity test, that test owns it: a change to an
+// epoch's list in core must change it here). Unknown epochs return nil.
 func HumanOnlyActions(rules int) []string {
 	switch rules {
 	case RulesClassic:

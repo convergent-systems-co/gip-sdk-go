@@ -125,8 +125,8 @@ gip ADR-0025 (batch C) gives a plugin a private key-value store and moves grant,
 | Method | `Request` helper | Purpose |
 |---|---|---|
 | `host/plugin/data/get {key}` | `DataGet`, `DataGetJSON` | The value and its `version`; a missing key is `Found: false`, not an error. |
-| `host/plugin/data/put {key, value, if_version?}` | `DataPut`, `DataPutJSON` | Write and return the new `version` (every write raises it). `if_version` is a compare-and-swap: absent writes unconditionally, `protocol.IfVersion(0)` only creates, `protocol.IfVersion(n)` replaces only version n. Versions are never reused: they are monotonic per (plugin, project, key) across delete and re-create (the host keeps a high-water mark), so a stale `if_version` never matches a re-created key. |
-| `host/plugin/data/delete {key, if_version?}` | `DataDelete` | Delete; reports whether the key existed. `if_version` as for put. |
+| `host/plugin/data/put {key, value, if_version?}` | `DataPut`, `DataPutJSON` | Write and return the new `version`. `if_version` is a compare-and-swap: absent writes unconditionally, `protocol.IfVersion(0)` only creates, `protocol.IfVersion(n)` replaces only version n. Versions come from one monotonic counter per (plugin, project): every write takes the next value, so no version is ever reused across delete and re-create, and a stale `if_version` never matches a re-created key. |
+| `host/plugin/data/delete {key, if_version?}` | `DataDelete` | Delete; reports whether the key existed. `if_version` as for put; `if_version` 0 on an existing key is `DATA_VERSION_MISMATCH` and deletes nothing. |
 | `host/plugin/data/list {prefix?, after?, limit?}` | `DataList` | One page of keys in byte order (`key`, `version`, `size`, no values); pass `next` as the next page's `after`. |
 
 | Limit (PLG-028) | Constant |
@@ -134,13 +134,28 @@ gip ADR-0025 (batch C) gives a plugin a private key-value store and moves grant,
 | Key: 1 to 200 bytes of printable ASCII (0x20 to 0x7E) | `MaxPluginDataKeyBytes` |
 | Value: at most 1 MiB (raw bytes; base64 on the wire) | `MaxPluginDataValueBytes` |
 | Per plugin per project: 4,096 keys and 64 MiB (host-enforced) | `MaxPluginDataKeys`, `MaxPluginDataBytes` |
-| List page: default 256, at most 1024 (contract core H implements) | `DefaultPluginDataListLimit`, `MaxPluginDataListLimit` |
+| List page: default 256, at most 1024 (the contract core H must implement) | `DefaultPluginDataListLimit`, `MaxPluginDataListLimit` |
 
 The helpers refuse locally, sending nothing, when `plugin-data` was not granted (`host.permission_denied`) or a key, value, prefix, cursor, limit or `if_version` breaks the limits (`DATA_KEY_INVALID`, `DATA_VALUE_TOO_LARGE`, `DATA_LIMIT_INVALID`, all `CodeInvalidParams`); each `Validate` method is the same check, for hosts and parity tests. The host refuses with code `CodeDataRefused` (-31004) and the stable ids `DATA_VERSION_MISMATCH` (compare-and-swap failed, nothing written), `DATA_QUOTA_EXCEEDED` and `NO_PROJECT`. Match them with `protocol.IsVersionMismatch`, `protocol.IsNoProject` (which also accepts the older `host.unavailable`) and `protocol.ErrorID`. A gip that predates plugin data answers the methods with method-not-found.
 
-Beyond the PLG-028 text, this SDK fixes the contract core H implements on the host side: the ids `NO_PROJECT` and `DATA_QUOTA_EXCEEDED` with code `CodeDataRefused` (-31004), the invalid-request ids above, the list page sizes, `if_version` 0 as create-only (matches a key that was never written or was deleted), and versions that are never reused for a key.
+Beyond the PLG-028 text, this SDK fixes the contract core H must implement on the host side: the ids `NO_PROJECT` and `DATA_QUOTA_EXCEEDED` with code `CodeDataRefused` (-31004), the invalid-request ids above, the list page sizes, `if_version` 0 as create-only (matches a key that was never written or was deleted), `DATA_VERSION_MISMATCH` for `if_version` 0 on a delete of an existing key, and one monotonic version counter per (plugin, project), so versions are never reused.
 
-**Children never get the channel.** The JSON-RPC channel (stdin and stdout) is the only way to the host, so a process the plugin starts must not inherit it. `gipplugin.Command` returns an `exec.Cmd` whose stdin and stdout are the null device (stderr is the plugin's); `gipplugin.CheckChild` returns `ErrChildInheritsChannel` for a command that would pass `os.Stdin` or `os.Stdout` as a stream or extra file. Use them for every process you start, model processes above all.
+**Children never get the channel.** The JSON-RPC channel is the only way to the host, so a process the plugin starts must not inherit it.
+
+- On Unix, `Serve` first moves the channel to private close-on-exec descriptors. It then points descriptor 0 at the null device and descriptor 1 at stderr, and `os.Stdin` and `os.Stdout` follow. So no child inherits the channel however its `exec.Cmd` is built (`os.Stdin`, `io.MultiWriter(os.Stdout, …)`, `os.NewFile(1, …)`), and a stray `fmt.Println` lands on stderr instead of corrupting the protocol.
+- On Linux, `Serve` also calls `prctl(PR_SET_DUMPABLE, 0)`, so a same-user process cannot reopen the channel through `/proc/<pid>/fd`.
+- If isolation fails, `Serve` exits 2 without serving. `ServeIO` with caller-supplied streams is unaffected.
+- `gipplugin.Command` stays the safe way to start children everywhere. It returns an `exec.Cmd` whose stdin and stdout are the null device (stderr is the plugin's).
+- `gipplugin.CheckChild` returns `ErrChildInheritsChannel` only when a command names `os.Stdin` or `os.Stdout` itself as a stream or extra file. A wrapped writer such as `io.MultiWriter(os.Stdout, buf)`, or a file made with `os.NewFile(1, …)`, is not caught.
+
+Remaining residual on Linux (for core H):
+- A process with `CAP_SYS_PTRACE`, or root, can still reach the channel through `/proc` or ptrace.
+- `PR_SET_DUMPABLE` is reset if the plugin changes its credentials (setuid or setgid) or execs.
+- A child started before `Serve` runs (for example from an `init` function) inherits descriptors 0 and 1 as the channel.
+- Plugin code that passes the private channel files to a child on purpose is not prevented.
+- A non-dumpable plugin writes no core dumps.
+
+The host-side read deny for `.gip/state.db` (core H) does not depend on any of this.
 
 **Record shapes** (read-only for plugins):
 

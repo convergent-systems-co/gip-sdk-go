@@ -265,11 +265,27 @@ func Fail(errorID, format string, a ...any) error {
 }
 
 // Serve runs the protocol loop on stdin/stdout and returns an exit code.
+//
+// Since SDK v0.10.0 (gip ADR-0025 §8) Serve first moves the channel to
+// private close-on-exec descriptors and points descriptor 0 at the null
+// device and descriptor 1 at stderr (os.Stdin and os.Stdout follow), so no
+// process the plugin starts can inherit the channel, whatever its
+// exec.Cmd, and anything printed to os.Stdout goes to stderr instead of
+// corrupting the protocol. On Linux it also makes the process
+// non-dumpable, so /proc/<pid>/fd cannot be reopened by same-user
+// processes. If that fails, Serve exits 2 without serving.
 func Serve(manifest []byte, handlers Handlers) int {
-	return ServeIO(context.Background(), manifest, handlers, os.Stdin, os.Stdout)
+	in, out, err := isolateChannel()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gipplugin: isolate the protocol channel:", err)
+		return 2
+	}
+	return ServeIO(context.Background(), manifest, handlers, in, out)
 }
 
-// ServeIO runs the protocol loop on the given streams.
+// ServeIO runs the protocol loop on the given streams. It leaves the
+// process's descriptors alone: a caller that passes os.Stdin and os.Stdout
+// gets none of Serve's channel isolation.
 func ServeIO(ctx context.Context, manifest []byte, handlers Handlers, in io.Reader, out io.Writer) int {
 	m, err := protocol.ParseManifest(manifest)
 	if err != nil {
