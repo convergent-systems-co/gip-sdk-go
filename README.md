@@ -11,7 +11,7 @@ go get github.com/convergent-systems-co/gip-sdk-go@latest
 | Package | Purpose |
 |---|---|
 | `protocol` | The `gip-plugin.json` manifest (schema `gip.plugin-manifest/v1`) and its validation; JSON-RPC 2.0 messages over NDJSON on stdin/stdout; the typed argument parser the gip host also uses |
-| `gipplugin` | `Serve(manifest, handlers)` for implementing a plugin; telemetry, host intent/state calls and structured errors |
+| `gipplugin` | `Serve(manifest, handlers)` for implementing a plugin; telemetry, host calls (intent, state, executor, plan, delivery, plugin data), structured errors, and `Command` for starting child processes without the protocol channel |
 | `conformance` | `conformance.Run(ctx, dir)`, protocol checks CNF-001 to CNF-008 for a built plugin directory |
 
 Rules a plugin must follow:
@@ -115,6 +115,58 @@ A person is asked exactly three things: changing or extending the intent, adding
 Types without a host method, for planners and tools: `RuntimeBlock` (the design's required fenced `gip-runtime` block under rules 2: `start`, `ready` with a loopback `http(s)` `url` or a `check` argv, `timeout_seconds` 1 to 600, `env` whose keys are identifiers not starting `GIP_`/`DYLD_`/`LD_` in any case, or `{"none":true}`. `ParseRuntimeBlock` takes exactly one block and refuses unclosed fences, closing fences indented more than three spaces, duplicate or wrong-case keys and trailing data; `Validate`; `Fence`), `IntentResolution` with `CheckResolutionSpan` (an agent resolves an ambiguity only with basis `intent` and a verbatim span of at least 24 bytes and 4 words, never a question), and `ProjectSettings` (`rules`, `autonomous`, `review_rejection_cap`; human-only, `Effective()` fills the defaults: rules 1, autonomous true, cap 3).
 
 Everything is additive: a gip built against an earlier SDK never sends the new fields. It decodes host requests into its own types, so it drops fields it does not know (a finding's `kind` is lost and recorded as work), refuses act kinds it does not know, answers a check without `work` with `host.invalid_params`, and answers the new methods with method-not-found.
+
+### Plugin data, agent authority and presence (v0.10.0)
+
+gip ADR-0025 (batch C) gives a plugin a private key-value store and moves grant, identity and conflict administration to agents under rules 3. The SDK carries the plugin data methods and the record shapes a plugin reads; gip decides and verifies everything.
+
+**Plugin data** (`host/plugin/data`, spec PLG-028, #61). With the `plugin-data` permission (`PermPluginData`, granted at trust time) a plugin keeps state the host holds in the project's `.gip/state.db`, which no sandbox declaration makes readable or writable, so neither the plugin's sandbox nor its model processes can read or forge it. The namespace is the plugin's short name and the project. The data is not governed: it is outside the ledger, not committed, and losing it means starting over.
+
+| Method | `Request` helper | Purpose |
+|---|---|---|
+| `host/plugin/data/get {key}` | `DataGet`, `DataGetJSON` | The value and its `version`; a missing key is `Found: false`, not an error. |
+| `host/plugin/data/put {key, value, if_version?}` | `DataPut`, `DataPutJSON` | Write and return the new `version`. `if_version` is a compare-and-swap: absent writes unconditionally, `protocol.IfVersion(0)` only creates, `protocol.IfVersion(n)` replaces only version n. Versions come from one monotonic counter per (plugin, project): every write takes the next value, so no version is ever reused across delete and re-create, and a stale `if_version` never matches a re-created key. |
+| `host/plugin/data/delete {key, if_version?}` | `DataDelete` | Delete; reports whether the key existed. `if_version` as for put; `if_version` 0 on an existing key is `DATA_VERSION_MISMATCH` and deletes nothing. |
+| `host/plugin/data/list {prefix?, after?, limit?}` | `DataList` | One page of keys in byte order (`key`, `version`, `size`, no values); pass `next` as the next page's `after`. |
+
+| Limit (PLG-028) | Constant |
+|---|---|
+| Key: 1 to 200 bytes of printable ASCII (0x20 to 0x7E) | `MaxPluginDataKeyBytes` |
+| Value: at most 1 MiB (raw bytes; base64 on the wire) | `MaxPluginDataValueBytes` |
+| Per plugin per project: 4,096 keys and 64 MiB (host-enforced) | `MaxPluginDataKeys`, `MaxPluginDataBytes` |
+| List page: default 256, at most 1024 (the contract core H must implement) | `DefaultPluginDataListLimit`, `MaxPluginDataListLimit` |
+
+The helpers refuse locally, sending nothing, when `plugin-data` was not granted (`host.permission_denied`) or a key, value, prefix, cursor, limit or `if_version` breaks the limits (`DATA_KEY_INVALID`, `DATA_VALUE_TOO_LARGE`, `DATA_LIMIT_INVALID`, all `CodeInvalidParams`); each `Validate` method is the same check, for hosts and parity tests. The host refuses with code `CodeDataRefused` (-31004) and the stable ids `DATA_VERSION_MISMATCH` (compare-and-swap failed, nothing written), `DATA_QUOTA_EXCEEDED` and `NO_PROJECT`. Match them with `protocol.IsVersionMismatch`, `protocol.IsNoProject` (which also accepts the older `host.unavailable`) and `protocol.ErrorID`. A gip that predates plugin data answers the methods with method-not-found.
+
+Beyond the PLG-028 text, this SDK fixes the contract core H must implement on the host side: the ids `NO_PROJECT` and `DATA_QUOTA_EXCEEDED` with code `CodeDataRefused` (-31004), the invalid-request ids above, the list page sizes, `if_version` 0 as create-only (matches a key that was never written or was deleted), `DATA_VERSION_MISMATCH` for `if_version` 0 on a delete of an existing key, and one monotonic version counter per (plugin, project), so versions are never reused.
+
+**Children never get the channel.** The JSON-RPC channel is the only way to the host, so a process the plugin starts must not inherit it.
+
+- On Unix, `Serve` first moves the channel to private close-on-exec descriptors. It then points descriptor 0 at the null device and descriptor 1 at stderr, and `os.Stdin` and `os.Stdout` follow. So no child inherits the channel however its `exec.Cmd` is built (`os.Stdin`, `io.MultiWriter(os.Stdout, …)`, `os.NewFile(1, …)`), and a stray `fmt.Println` lands on stderr instead of corrupting the protocol.
+- On Linux, `Serve` also calls `prctl(PR_SET_DUMPABLE, 0)`, so a same-user process cannot reopen the channel through `/proc/<pid>/fd`.
+- If isolation fails, `Serve` exits 2 without serving. `ServeIO` with caller-supplied streams is unaffected.
+- `gipplugin.Command` stays the safe way to start children everywhere. It returns an `exec.Cmd` whose stdin and stdout are the null device (stderr is the plugin's).
+- `gipplugin.CheckChild` returns `ErrChildInheritsChannel` only when a command names `os.Stdin` or `os.Stdout` itself as a stream or extra file. A wrapped writer such as `io.MultiWriter(os.Stdout, buf)`, or a file made with `os.NewFile(1, …)`, is not caught.
+
+Remaining residual on Linux (for core H):
+- A process with `CAP_SYS_PTRACE`, or root, can still reach the channel through `/proc` or ptrace.
+- `PR_SET_DUMPABLE` is reset if the plugin changes its credentials (setuid or setgid) or execs.
+- A child started before `Serve` runs (for example from an `init` function) inherits descriptors 0 and 1 as the channel.
+- Plugin code that passes the private channel files to a child on purpose is not prevented.
+- A non-dumpable plugin writes no core dumps.
+
+The host-side read deny for `.gip/state.db` (core H) does not depend on any of this.
+
+**Record shapes** (read-only for plugins):
+
+| Surface | Field or constant | Purpose |
+|---|---|---|
+| Questions (`PlanQuestion`, `Ambiguity`) | `closed_by.kind` `ledger.resolve` (`ClosedByLedgerResolve`, `QuestionClosure.IsClosedByLedgerResolve`) | A merge conflict no independent agent may resolve becomes a blocking class `decision` question tagged `merge-conflict` (`QuestionTagMergeConflict`) naming its ceremony in `refs`. Only the person's `ledger.resolve` closes it (`answered`, `ref` the resolve event): an answering intent revision carries it over, `delivery.accept` never defaults it, no agent closes it. `ReservedQuestionTags` lists the tags only the gateway sets. |
+| Merge-conflict ceremony (`MergePending`) | `authors`, `class` | Principals conflicted over the object (refused as resolvers, `CONFLICT_OF_INTEREST`) and `human`/`agent` (`ConflictClassHuman`: only a person, `HUMAN_CLASS_CONFLICT`). A conflict recorded before rules 3 has no authors (`AUTHORS_UNKNOWN`). `IsAuthor` is for display only: gip also follows grant and binding chains. |
+| `Attestation` | `presence {key, signed_at, sig}` (`Presence`) | The Secure Enclave touch a person enrolled in presence adds to every human-only act, human decision and change to a human's identity or grants. `PresenceContext`, `PresenceDomainLedger`/`PresenceDomainInstallation`, `PresenceFreshness` (5 minutes); refusals `PRESENCE_REQUIRED`, `PRESENCE_INVALID`. |
+| Rules epochs | `RulesAgentAuthority` (3), `HumanOnlyActions(rules)` | Under rules 3 only `intent.revise`, `delivery.accept` and `project.settings` stay human; grants, identities, gateways, leases and conflicts go to agents (`agent:*` only). Not selectable until gip's switch-on release. |
+
+Everything is additive: a gip built against an earlier SDK never sends the new fields, and plugins built against an earlier SDK keep working without `host/plugin/data`.
 
 A command may declare `timeout_seconds`, up to 7200, when one invocation runs longer than the host's default.
 

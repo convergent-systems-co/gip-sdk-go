@@ -130,7 +130,44 @@ const (
 	// ClosedByDelivery: a delivery acceptance closed the held question
 	// with its default; Ref is the delivery id ("delivery-<n>").
 	ClosedByDelivery = "delivery"
+	// ClosedByLedgerResolve (SDK v0.10.0, gip ADR-0025 §3, owner Q6 a): the
+	// person's ledger.resolve of a merge-conflict ceremony closed a
+	// conflict question (tagged QuestionTagMergeConflict); Ref is the
+	// resolve event's id. The question is answered. Conflict questions are
+	// the one exception to "answers become intent revisions": an answering
+	// intent revision neither answers nor withdraws one (it carries over),
+	// delivery.accept never defaults one, and no agent closes one.
+	ClosedByLedgerResolve = "ledger.resolve"
 )
+
+// Reserved question tags (gip EXE-025, ADR-0025 §3): only the gateway
+// raises a question carrying one, at the start of its text and among its
+// refs; a request that raises a question with one, however spelled, is
+// refused (RESERVED_QUESTION_TAG).
+const (
+	// QuestionTagUnreviewableExhausted: a unit was rejected as
+	// unreviewable more than MaxUnreviewable times (ADR-0024 §8).
+	QuestionTagUnreviewableExhausted = "unreviewable-exhausted"
+	// QuestionTagRescopeExhausted: a unit lineage needs a second re-scope.
+	QuestionTagRescopeExhausted = "rescope-exhausted"
+	// QuestionTagMergeConflict (SDK v0.10.0, ADR-0025 §3): a merge
+	// conflict no independent agent may resolve. The question is blocking,
+	// class decision, names its merge-conflict ceremony in refs, and closes
+	// only with ClosedByLedgerResolve.
+	QuestionTagMergeConflict = "merge-conflict"
+)
+
+// ReservedQuestionTags returns the tags only the gateway puts on a
+// question.
+func ReservedQuestionTags() []string {
+	return []string{QuestionTagUnreviewableExhausted, QuestionTagRescopeExhausted, QuestionTagMergeConflict}
+}
+
+// IsClosedByLedgerResolve reports whether the closure is a person's
+// ledger.resolve of a conflict question; false for nil.
+func (c *QuestionClosure) IsClosedByLedgerResolve() bool {
+	return c != nil && c.Kind == ClosedByLedgerResolve
+}
 
 // QuestionClosure is a question's closed_by (gip intent.v1, ADR-0024 §6).
 type QuestionClosure struct {
@@ -262,10 +299,15 @@ type Provenance struct {
 // Attestation: AttestedBy is "interactive" (or, in records made before
 // proxies were retired, "proxy:<name>"); Shown and Basis are the digests
 // of the screen the person confirmed and of its state basis.
+//
+// Presence (SDK v0.10.0, gip ADR-0025 D8) is the human-presence signature
+// a person enrolled in presence adds to every act that needs a touch
+// (D9); absent otherwise, and from a gip that predates it.
 type Attestation struct {
-	AttestedBy string `json:"attested_by"`
-	Shown      string `json:"shown,omitempty"`
-	Basis      string `json:"basis,omitempty"`
+	AttestedBy string    `json:"attested_by"`
+	Shown      string    `json:"shown,omitempty"`
+	Basis      string    `json:"basis,omitempty"`
+	Presence   *Presence `json:"presence,omitempty"`
 }
 
 // HostDeliveryPrepareParams asks gip to prepare the delivery as principal
