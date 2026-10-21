@@ -167,6 +167,14 @@ func TestIntentProposeAndDelivery(t *testing.T) {
 	if dr.Code != "QUESTION_OPEN" || dr.Record != nil {
 		t.Fatalf("prepare result %+v", dr)
 	}
+	if CodeRuntimeNotStarted != "RUNTIME_NOT_STARTED" {
+		t.Fatal("result codes are part of the protocol")
+	}
+	var nr HostDeliveryPrepareResult
+	strict(t, `{"disposition":"BLOCKED","code":"RUNTIME_NOT_STARTED","reasons":["runtime exited before ready"],"event_seq":0}`, &nr)
+	if nr.Disposition != "BLOCKED" || nr.Code != CodeRuntimeNotStarted || nr.Delivery != "" || nr.Record != nil {
+		t.Fatalf("runtime-not-started result %+v", nr)
+	}
 	encodes(t, DeliveryRecord{ID: "delivery-1", Status: DeliveryAccepted}, []string{`"status":"accepted"`}, "prepared", "accepted\":{", "design")
 }
 

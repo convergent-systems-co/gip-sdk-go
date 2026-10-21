@@ -293,6 +293,15 @@ type HostDeliveryPrepareResult struct {
 	EventSeq    int64           `json:"event_seq"`
 }
 
+// CodeRuntimeNotStarted is the Code host/delivery/prepare returns, with
+// Disposition BLOCKED and nothing recorded, when the design's runtime did
+// not start: it exited before it was ready, never became ready within its
+// timeout, its ready address was already in use, or its start command
+// could not be started (binary not found or not executable). Fix the
+// design's runtime block or the environment and prepare again; any other
+// failure to start it is a host error, not this code.
+const CodeRuntimeNotStarted = "RUNTIME_NOT_STARTED"
+
 // Project settings defaults and bounds (gip ADR-0024 §2).
 const (
 	DefaultReviewRejectionCap = 3
