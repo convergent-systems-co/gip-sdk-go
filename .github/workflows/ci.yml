@@ -1,8 +1,9 @@
 name: ci
+# On demand only (owner, 2026-10-21): CI costs money, so it never runs on
+# pushes or pull requests. Validate locally with `make ci`; run this
+# workflow by hand (gh workflow run ci) at the end of a batch.
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
