@@ -115,6 +115,10 @@ type MergePending struct {
 	Candidates  []MergeCandidate `json:"candidates"`
 	Authors     []string         `json:"authors,omitempty"`
 	Class       string           `json:"class,omitempty"`
+	// PresenceFlagged (SDK v0.11.0) lists the candidates whose branch made
+	// an untouched act needing a touch on the object after the other
+	// branch enrolled the human's presence: none is ever adopted.
+	PresenceFlagged []string `json:"presence_flagged,omitempty"`
 }
 
 // AuthorsKnown reports whether the merge recorded its authors (a merge

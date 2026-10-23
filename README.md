@@ -11,7 +11,7 @@ go get github.com/convergent-systems-co/gip-sdk-go@latest
 | Package | Purpose |
 |---|---|
 | `protocol` | The `gip-plugin.json` manifest (schema `gip.plugin-manifest/v1`) and its validation; JSON-RPC 2.0 messages over NDJSON on stdin/stdout; the typed argument parser the gip host also uses |
-| `gipplugin` | `Serve(manifest, handlers)` for implementing a plugin; telemetry, host calls (intent, state, executor, plan, delivery, plugin data), structured errors, and `Command` for starting child processes without the protocol channel |
+| `gipplugin` | `Serve(manifest, handlers)` for implementing a plugin; telemetry, host calls (intent, state, executor, plan, delivery, plugin data, merge conflicts), structured errors, and `Command` for starting child processes without the protocol channel |
 | `conformance` | `conformance.Run(ctx, dir)`, protocol checks CNF-001 to CNF-008 for a built plugin directory |
 
 Rules a plugin must follow:
@@ -171,6 +171,18 @@ Everything is additive: a gip built against an earlier SDK never sends the new f
 A command may declare `timeout_seconds`, up to 7200, when one invocation runs longer than the host's default.
 
 The full protocol specification is in the gip repository under `docs/spec/plugin-protocol.md`. A reference plugin is [gip-plugin-discovery](https://github.com/convergent-systems-co/gip-plugin-discovery).
+
+### Merge-conflict resolution by an agent (v0.11.0)
+
+gip issue #108 (ADR-0025 §3, D4, D5; spec LM-026 to LM-028) gives a plugin acting as an agent that holds a `ledger.resolve` grant a way to decide the merge-conflict ceremonies it is not a party to, or to hand one to a person. The permission is `conflicts.resolve` (`PermConflictsResolve`, granted at trust time); no other permission includes it, and every helper refuses locally (`host.permission_denied`, nothing sent) without it.
+
+| Method | `Request` helper | Purpose |
+|---|---|---|
+| `host/conflicts/list {ceremony?}` | `ConflictsList` | The open merge-conflict ceremonies (`ConflictCeremony`): `id`, `revision`, `object {kind, id, revision}`, `class` (`human`, `agent`, or empty before rules 3), `codes`, `candidates` (`id` a, b, base or absent; `summary`; `author`; `provisional`; `presence_flagged`; `record`), `authors`, and `question` when a conflict question asks the person. `AgentResolvable`, `IsAuthor`, `QuestionOpen`, `Candidate`. |
+| `host/conflicts/resolve {as, ceremony, revision, adopt \| keep, rationale, request_id}` | `ConflictResolve` | gip's `ceremony.decide` of the ceremony: `adopt` a candidate (approve `--adopt`) or `keep` the provisional version (reject); exactly one. `revision` is the ceremony's (`STALE_REVISION` when it moved); `request_id` is required and replays the recorded result. |
+| `host/conflicts/decline {as, ceremony, revision, reason, request_id?}` | `ConflictDecline` | The agent cannot decide it: the gateway raises the blocking conflict question (tagged `merge-conflict`) a merge raises when no agent may resolve, at most one per ceremony. The result names the `question`; `raised` is false when it was already open. |
+
+Results are dispositions (`DispositionAccepted`, `DispositionRejected`, `DispositionBlocked`, `DispositionHumanRequired`) with a `code`, not errors. The gateway's refusals apply unchanged: `CONFLICT_OF_INTEREST` (an author, or a grant or binding chain through one, D4), `HUMAN_CLASS_CONFLICT` (D5), `AUTHORS_UNKNOWN` (recorded before rules 3), `QUESTION_OPEN` (a conflict question asks the person), `STALE_REVISION`, and `CONFLICT_NOT_OPEN` (no such open merge-conflict ceremony; the contract core implements for #108). The helpers check the shape first and send nothing on `CONFLICT_REQUEST_INVALID` (`CodeInvalidParams`): ids, principals and request ids are 1 to 200 bytes of printable ASCII without spaces (`MaxConflictIDBytes`), `revision` is at least 1, and a rationale or reason is non-blank UTF-8 of at most 4000 bytes (`MaxConflictRationaleBytes`) with no control characters but newline and tab, sent with CRLF normalised to LF (`ValidConflictText`). `MergePending` gains `presence_flagged`. A gip that predates it answers the methods with method-not-found.
 
 ## License
 

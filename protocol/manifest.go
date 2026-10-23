@@ -153,14 +153,15 @@ const (
 	// work.execute nor work.review includes it, so a plugin qualifies,
 	// accepts and delivers only when trusted to.
 	PermWorkDeliver = "work.deliver"
-	// PermPlanWrite (SDK v0.4.0) is declared in plan.go.
+	// PermPlanWrite (SDK v0.4.0) is declared in plan.go, and
+	// PermConflictsResolve (SDK v0.11.0) in conflicts.go.
 )
 
 // KnownPermissions is the closed set accepted by protocol v1.
 var KnownPermissions = []string{
 	PermTelemetryEmit, PermStateRead, PermIntentRead, PermProposalsSubmit,
 	PermEvidenceSubmit, PermPluginData, PermWorkRead, PermWorkExecute, PermConfigRead,
-	PermPlanWrite, PermWorkReview, PermWorkDeliver,
+	PermPlanWrite, PermWorkReview, PermWorkDeliver, PermConflictsResolve,
 }
 
 // MaxCommandTimeoutSeconds bounds a command's declared timeout.
