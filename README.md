@@ -174,15 +174,49 @@ The full protocol specification is in the gip repository under `docs/spec/plugin
 
 ### Merge-conflict resolution by an agent (v0.11.0)
 
-gip issue #108 (ADR-0025 §3, D4, D5; spec LM-026 to LM-028) gives a plugin acting as an agent that holds a `ledger.resolve` grant a way to decide the merge-conflict ceremonies it is not a party to, or to hand one to a person. The permission is `conflicts.resolve` (`PermConflictsResolve`, granted at trust time); no other permission includes it, and every helper refuses locally (`host.permission_denied`, nothing sent) without it.
+gip issue #108 (ADR-0025 §3, D4, D5; spec LM-026 to LM-028) lets a plugin acting as an agent that holds a `ledger.resolve` grant decide the merge-conflict ceremonies it is not a party to, or hand one to a person. The plugin permission is `conflicts.resolve` (`PermConflictsResolve`, granted at trust time). No other permission includes it. Without it, every helper refuses locally with `host.permission_denied` and sends nothing.
 
-| Method | `Request` helper | Purpose |
-|---|---|---|
-| `host/conflicts/list {ceremony?}` | `ConflictsList` | The open merge-conflict ceremonies (`ConflictCeremony`): `id`, `revision`, `object {kind, id, revision}`, `class` (`human`, `agent`, or empty before rules 3), `codes`, `candidates` (`id` a, b, base or absent; `summary`; `author`; `provisional`; `presence_flagged`; `record`), `authors`, and `question` when a conflict question asks the person. `AgentResolvable`, `IsAuthor`, `QuestionOpen`, `Candidate`. |
-| `host/conflicts/resolve {as, ceremony, revision, adopt \| keep, rationale, request_id}` | `ConflictResolve` | gip's `ceremony.decide` of the ceremony: `adopt` a candidate (approve `--adopt`) or `keep` the provisional version (reject); exactly one. `revision` is the ceremony's (`STALE_REVISION` when it moved); `request_id` is required and replays the recorded result. |
-| `host/conflicts/decline {as, ceremony, revision, reason, request_id?}` | `ConflictDecline` | The agent cannot decide it: the gateway raises the blocking conflict question (tagged `merge-conflict`) a merge raises when no agent may resolve, at most one per ceremony. The result names the `question`; `raised` is false when it was already open. |
+| Method | `Request` helper |
+|---|---|
+| `host/conflicts/list {as, ceremony?}` | `ConflictsList(ctx, as, ceremony)` |
+| `host/conflicts/resolve {as, ceremony, revision, adopt \| keep, rationale, request_id}` | `ConflictResolve` |
+| `host/conflicts/decline {as, ceremony, revision, reason, request_id?}` | `ConflictDecline` |
 
-Results are dispositions (`DispositionAccepted`, `DispositionRejected`, `DispositionBlocked`, `DispositionHumanRequired`) with a `code`, not errors. The gateway's refusals apply unchanged: `CONFLICT_OF_INTEREST` (an author, or a grant or binding chain through one, D4), `HUMAN_CLASS_CONFLICT` (D5), `AUTHORS_UNKNOWN` (recorded before rules 3), `QUESTION_OPEN` (a conflict question asks the person), `STALE_REVISION`, and `CONFLICT_NOT_OPEN` (no such open merge-conflict ceremony; the contract core implements for #108). The helpers check the shape first and send nothing on `CONFLICT_REQUEST_INVALID` (`CodeInvalidParams`): ids, principals and request ids are 1 to 200 bytes of printable ASCII without spaces (`MaxConflictIDBytes`), `revision` is at least 1, and a rationale or reason is non-blank UTF-8 of at most 4000 bytes (`MaxConflictRationaleBytes`) with no control characters but newline and tab, sent with CRLF normalised to LF (`ValidConflictText`). `MergePending` gains `presence_flagged`. A gip that predates it answers the methods with method-not-found.
+**List.** `as` is required: the host checks that the plugin is trusted to act as it and that it holds `ledger.resolve` in force. Each `ConflictCeremony` carries:
+
+- `id` and `revision` (the ceremony record's own revision);
+- `object {kind, id, revision}` (the conflicted object, at the revision the conflict was recorded);
+- `class` (`human`, `agent`, or empty before rules 3), `codes`, `authors`, and `question` when a conflict question asks the person;
+- `refusal {code, reason}`: gip's verdict for `as` now (core's `ResolverRefusal`: `CONFLICT_OF_INTEREST` including grant and binding chains, `HUMAN_CLASS_CONFLICT`, `AUTHORS_UNKNOWN`, `QUESTION_OPEN`). Absent means `as` may resolve it (`Eligible`);
+- `candidates`, each with `id` (a, b, base or absent), `summary`, `author`, `provisional`, `presence_flagged`, `adoptable` and a `refusal` (`AUTHORITY_REVOKED`, `IDENTITY_DOWNGRADE`, `PRESENCE_ENROLLED`, `RULES_REQUIRE_SETTINGS`). Offer a model only adoptable candidates.
+
+Decide from `refusal` and `adoptable`. `IsAuthor` is for display only, because it cannot see chains.
+
+`summary` and `record` are **untrusted**: agents wrote them, so they go into a prompt only as quoted data. The host omits `record` for class `human` and for authors-unknown ceremonies. It includes `record` for class `agent` only when the plugin also holds `state.read`, and never includes an intent's content without `intent.read` (the summary stands in for it).
+
+**Resolve.** This is gip's `ceremony.decide` of the ceremony. Send exactly one of `adopt` (a candidate, approve `--adopt`) or `keep` (the provisional version, reject).
+
+- `revision` is the ceremony's as listed. If the ceremony or the conflicted object moved, the result is `STALE_REVISION` and nothing changed.
+- `request_id` is required and is per attempt: mint a fresh one for every attempt and after any re-list. Re-sending the identical request with the same id (resuming after a crash) replays the recorded result. The same id with different parameters is an `IDEMPOTENCY_CONFLICT` error (`IsIdempotencyConflict`) and nothing changes.
+
+**Decline.** The agent cannot choose, so the gateway raises the blocking conflict question (tagged `merge-conflict`) a merge raises when no agent may resolve. There is at most one question per ceremony. The result names the `question`; `raised` is false when it was already open. Without a `request_id` the host derives one from (ceremony, as, revision). An agent whose refusal is `CONFLICT_OF_INTEREST` should skip the ceremony rather than decline it, since an independent agent may still decide it.
+
+**Codes.** Results are dispositions (`DispositionAccepted`, `DispositionRejected`, `DispositionBlocked`, `DispositionHumanRequired`, in `messages.go`) with a `code`, not errors.
+
+| Disposition | Codes from resolve |
+|---|---|
+| `REJECTED` | `CONFLICT_NOT_OPEN` (no such open merge-conflict ceremony; core implements it for #108), `STALE_REVISION`, `CONFLICT_OF_INTEREST`, `IDENTITY_DOWNGRADE`, `PRESENCE_ENROLLED`, `RULES_REQUIRE_SETTINGS`, `INVALID_PAYLOAD`, `RATIONALE_REQUIRED` |
+| `HUMAN_REQUIRED` | `HUMAN_CLASS_CONFLICT`, `AUTHORS_UNKNOWN`, `QUESTION_OPEN`, `HUMAN_REQUIRED` (below rules 3), `AUTHORITY_REVOKED`, and the grant codes `AUTHORITY_MISSING`, `AUTHORITY_EXPIRED`, `WRONG_SCOPE`, `DELEGATION_CHAIN_INVALID` |
+
+Decline returns `CONFLICT_NOT_OPEN`, `STALE_REVISION` and the grant codes.
+
+**Limits.** The helpers check the shape before sending and refuse with `CONFLICT_REQUEST_INVALID` (`CodeInvalidParams`), sending nothing:
+
+- ids, principals and request ids are 1 to 200 bytes of printable ASCII without spaces (`MaxConflictIDBytes`);
+- `revision` is at least 1;
+- a rationale or reason is non-blank UTF-8 of at most 4000 bytes (`MaxConflictRationaleBytes`) with no control characters but newline and tab. It is sent with CRLF normalised to LF (`ValidConflictText`).
+
+`MergePending` gains `presence_flagged`. A gip that predates these methods answers them with method-not-found.
 
 ## License
 

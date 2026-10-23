@@ -17,13 +17,27 @@ func TestConflictMethodsAndPermission(t *testing.T) {
 	if PermConflictsResolve != "conflicts.resolve" || !slices.Contains(KnownPermissions, PermConflictsResolve) {
 		t.Fatal("conflicts.resolve must be a known permission")
 	}
-	for code, s := range map[string]string{
-		CodeConflictOfInterest: "CONFLICT_OF_INTEREST", CodeHumanClassConflict: "HUMAN_CLASS_CONFLICT",
-		CodeAuthorsUnknown: "AUTHORS_UNKNOWN", CodeQuestionOpen: "QUESTION_OPEN", CodeStaleRevision: "STALE_REVISION",
-		CodeConflictNotOpen: "CONFLICT_NOT_OPEN", CodeConflictRequestInvalid: "CONFLICT_REQUEST_INVALID",
+	for _, c := range [][2]string{
+		{CodeConflictOfInterest, "CONFLICT_OF_INTEREST"},
+		{CodeHumanClassConflict, "HUMAN_CLASS_CONFLICT"},
+		{CodeAuthorsUnknown, "AUTHORS_UNKNOWN"},
+		{CodeQuestionOpen, "QUESTION_OPEN"},
+		{CodeStaleRevision, "STALE_REVISION"},
+		{CodeConflictNotOpen, "CONFLICT_NOT_OPEN"},
+		{CodeConflictRequestInvalid, "CONFLICT_REQUEST_INVALID"},
+		{CodeHumanRequired, "HUMAN_REQUIRED"},
+		{CodeAuthorityRevoked, "AUTHORITY_REVOKED"},
+		{CodeIdentityDowngrade, "IDENTITY_DOWNGRADE"},
+		{CodePresenceEnrolled, "PRESENCE_ENROLLED"},
+		{CodeRulesRequireSettings, "RULES_REQUIRE_SETTINGS"},
+		{CodeIdempotencyConflict, "IDEMPOTENCY_CONFLICT"},
+		{DispositionAccepted, "ACCEPTED"},
+		{DispositionRejected, "REJECTED"},
+		{DispositionBlocked, "BLOCKED"},
+		{DispositionHumanRequired, "HUMAN_REQUIRED"},
 	} {
-		if code != s {
-			t.Errorf("code %q drifted from %q", code, s)
+		if c[0] != c[1] {
+			t.Errorf("code %q drifted from %q", c[0], c[1])
 		}
 	}
 	if MaxConflictRationaleBytes != 4000 {
@@ -44,13 +58,21 @@ func TestConflictMethodsAndPermission(t *testing.T) {
 func TestConflictWireShapes(t *testing.T) {
 	var l HostConflictsListResult
 	strict(t, `{"conflicts":[{"id":"cer-7","revision":1,"object":{"kind":"work","id":"w-3","revision":4},"class":"agent","codes":["DIVERGED"],
-	"candidates":[{"id":"a","head":"h1","revision":4,"summary":"s","author":"agent:b","provisional":true,"presence_flagged":true,"record":{"id":"w-3"}}],
-	"authors":["agent:b"],"question":"amb-1"}]}`, &l)
+	"candidates":[{"id":"a","head":"h1","revision":4,"summary":"s","author":"agent:b","provisional":true,"presence_flagged":true,
+	"adoptable":false,"refusal":{"code":"PRESENCE_ENROLLED","reason":"r"},"record":{"id":"w-3"}}],
+	"authors":["agent:b"],"question":"amb-1","refusal":{"code":"QUESTION_OPEN","reason":"amb-1"}}]}`, &l)
 	c := l.Conflicts[0]
-	if c.Object.ID != "w-3" || !c.QuestionOpen() || c.AgentResolvable() || !c.Candidates[0].PresenceFlagged || string(c.Candidates[0].Record) != `{"id":"w-3"}` {
+	if c.Object.ID != "w-3" || !c.QuestionOpen() || c.AgentResolvable() || c.Eligible() || c.Refusal.Code != CodeQuestionOpen ||
+		!c.Candidates[0].PresenceFlagged || c.Candidates[0].Refusal.Code != CodePresenceEnrolled || string(c.Candidates[0].Record) != `{"id":"w-3"}` {
 		t.Fatalf("%+v", c)
 	}
-	encodes(t, HostConflictsListParams{}, []string{`{}`})
+	encodes(t, HostConflictsListParams{As: "agent:r"}, []string{`{"as":"agent:r"}`})
+	encodes(t, ConflictCandidate{ID: "a"}, []string{`"adoptable":false`}, `"record"`, `"refusal"`)
+	var e ConflictCeremony
+	strict(t, `{"id":"c","revision":1,"object":{"kind":"work","id":"w","revision":1},"candidates":[]}`, &e)
+	if !e.Eligible() {
+		t.Fatal("no refusal means eligible")
+	}
 	encodes(t, HostConflictResolveParams{As: "agent:r", Ceremony: "cer-7", Revision: 1, Adopt: "b", Rationale: "r", RequestID: "q"},
 		[]string{`"as":"agent:r"`, `"ceremony":"cer-7"`, `"revision":1`, `"adopt":"b"`, `"rationale":"r"`, `"request_id":"q"`}, `"keep"`)
 	encodes(t, HostConflictResolveParams{Keep: true}, []string{`"keep":true`}, `"adopt"`)

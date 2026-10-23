@@ -15,16 +15,41 @@ const conflictsManifest = `{"schema":"gip.plugin-manifest/v1","name":"gip-plugin
 "commands":[{"name":"t","summary":"s","subcommands":[{"name":"run","summary":"s","permissions":["conflicts.resolve"]}]}]}`
 
 // conflictHost is a scripted host holding merge-conflict ceremonies with
-// the gateway's dispositions for #108: an author is refused
-// (CONFLICT_OF_INTEREST), a stale revision is STALE_REVISION, a decided
-// ceremony is CONFLICT_NOT_OPEN, and a decline raises one question per
-// ceremony.
+// the gateway's dispositions for #108: an author, or an agent whose
+// binding chain runs through one (chained), is refused
+// (CONFLICT_OF_INTEREST) and the list says so for it; a stale revision is
+// STALE_REVISION, a decided ceremony CONFLICT_NOT_OPEN, a candidate that
+// cannot be adopted is listed with its refusal, records are withheld
+// unless the ceremony is agent class with authors and the plugin holds
+// state.read (stateRead), a reused request id with other parameters is
+// IDEMPOTENCY_CONFLICT, and a decline raises one question per ceremony.
 type conflictHost struct {
 	open      map[string]*protocol.ConflictCeremony
+	chained   map[string]bool
+	stateRead bool
 	questions int
-	replays   map[string]protocol.HostConflictResolveResult
+	replays   map[string]resolveReplay
 	calls     []string
 	params    []json.RawMessage
+}
+
+type resolveReplay struct {
+	p   protocol.HostConflictResolveParams
+	res protocol.HostConflictResolveResult
+}
+
+func (h *conflictHost) refusal(c *protocol.ConflictCeremony, as string) *protocol.ConflictRefusal {
+	switch {
+	case c.Class == protocol.ConflictClassHuman:
+		return &protocol.ConflictRefusal{Code: protocol.CodeHumanClassConflict, Reason: "human class"}
+	case len(c.Authors) == 0:
+		return &protocol.ConflictRefusal{Code: protocol.CodeAuthorsUnknown, Reason: "no authors"}
+	case c.Question != "":
+		return &protocol.ConflictRefusal{Code: protocol.CodeQuestionOpen, Reason: c.Question}
+	case c.IsAuthor(as) || h.chained[as]:
+		return &protocol.ConflictRefusal{Code: protocol.CodeConflictOfInterest, Reason: "author or chain"}
+	}
+	return nil
 }
 
 func newConflictHost() *conflictHost {
@@ -35,12 +60,16 @@ func newConflictHost() *conflictHost {
 				Candidates: []protocol.ConflictCandidate{
 					{ID: "a", Head: "h1", Revision: 4, Summary: "work w-3 submitted", Author: "agent:builder", Provisional: true, Record: json.RawMessage(`{"id":"w-3"}`)},
 					{ID: "b", Head: "h2", Revision: 4, Summary: "work w-3 withdrawn", Author: "agent:planner", Record: json.RawMessage(`{"id":"w-3"}`)},
+					{ID: "base", Revision: 3, Summary: "work w-3 ready", Author: "agent:planner", PresenceFlagged: true,
+						Refusal: &protocol.ConflictRefusal{Code: protocol.CodePresenceEnrolled, Reason: "flagged"}, Record: json.RawMessage(`{"id":"w-3"}`)},
 				}},
 			"cer-9": {ID: "cer-9", Revision: 2, Object: protocol.ConflictObject{Kind: "intent", ID: "main", Revision: 5},
 				Class: protocol.ConflictClassHuman, Authors: []string{"human:t"}, Question: "amb-12",
-				Candidates: []protocol.ConflictCandidate{{ID: "a", Summary: "s"}, {ID: "b", Summary: "s"}}},
+				Candidates: []protocol.ConflictCandidate{{ID: "a", Summary: "s", Record: json.RawMessage(`{"content":"secret"}`)}, {ID: "b", Summary: "s"}}},
 		},
-		replays: map[string]protocol.HostConflictResolveResult{},
+		chained:   map[string]bool{"agent:proxy": true},
+		stateRead: true,
+		replays:   map[string]resolveReplay{},
 	}
 }
 
@@ -55,7 +84,17 @@ func (h *conflictHost) answer(m *protocol.Message) *protocol.Message {
 		out := protocol.HostConflictsListResult{Conflicts: []protocol.ConflictCeremony{}}
 		for _, id := range []string{"cer-7", "cer-9"} {
 			if c := h.open[id]; c != nil && (p.Ceremony == "" || p.Ceremony == id) {
-				out.Conflicts = append(out.Conflicts, *c)
+				x := *c
+				x.Refusal = h.refusal(c, p.As)
+				x.Candidates = nil
+				for _, cand := range c.Candidates {
+					cand.Adoptable = x.Refusal == nil && cand.Refusal == nil
+					if x.Class != protocol.ConflictClassAgent || len(x.Authors) == 0 || !h.stateRead {
+						cand.Record = nil
+					}
+					x.Candidates = append(x.Candidates, cand)
+				}
+				out.Conflicts = append(out.Conflicts, x)
 			}
 		}
 		res = out
@@ -63,7 +102,10 @@ func (h *conflictHost) answer(m *protocol.Message) *protocol.Message {
 		var p protocol.HostConflictResolveParams
 		_ = json.Unmarshal(m.Params, &p)
 		if r, ok := h.replays[p.RequestID]; ok {
-			res = r
+			if r.p != p {
+				return protocol.ErrorResponse(m.ID, protocol.NewError(protocol.CodeInvalidParams, protocol.CodeIdempotencyConflict, "request id reused"))
+			}
+			res = r.res
 			break
 		}
 		c := h.open[p.Ceremony]
@@ -73,10 +115,14 @@ func (h *conflictHost) answer(m *protocol.Message) *protocol.Message {
 			out.Code = protocol.CodeConflictNotOpen
 		case c.Revision != p.Revision:
 			out.Code = protocol.CodeStaleRevision
-		case c.Class == protocol.ConflictClassHuman:
-			out.Disposition, out.Code = protocol.DispositionHumanRequired, protocol.CodeHumanClassConflict
-		case c.IsAuthor(p.As):
-			out.Code = protocol.CodeConflictOfInterest
+		case h.refusal(c, p.As) != nil:
+			r := h.refusal(c, p.As)
+			out.Code = r.Code
+			if r.Code != protocol.CodeConflictOfInterest {
+				out.Disposition = protocol.DispositionHumanRequired
+			}
+		case c.Candidate(p.Adopt) != nil && c.Candidate(p.Adopt).Refusal != nil:
+			out.Code = c.Candidate(p.Adopt).Refusal.Code
 		default:
 			out = protocol.HostConflictResolveResult{Disposition: protocol.DispositionAccepted, Reasons: []string{}, EventSeq: 40}
 			if p.Keep {
@@ -85,7 +131,7 @@ func (h *conflictHost) answer(m *protocol.Message) *protocol.Message {
 				out.Result = "ADOPTED " + p.Adopt
 			}
 			delete(h.open, p.Ceremony)
-			h.replays[p.RequestID] = out
+			h.replays[p.RequestID] = resolveReplay{p, out}
 		}
 		res = out
 	case protocol.MethodHostConflictDecline:
@@ -152,26 +198,40 @@ func runConflicts(t *testing.T, granted []string, host *conflictHost, handler Ha
 	}
 }
 
-// TestConflicts drives list, resolve and decline through ServeIO: an
-// independent agent adopts a candidate (replayed by its request id), an
-// author is refused, a stale revision and a decided ceremony are refused,
-// a human-class conflict needs a person, and a decline raises one
-// question per ceremony (#108, ADR-0025 §3).
+// TestConflicts drives list, resolve and decline through ServeIO: the
+// list carries gip's verdict for the listing principal (including a chain
+// conflict Authors cannot show) and each candidate's adoptability; records
+// are withheld for a human-class ceremony; an independent agent adopts a
+// candidate (replayed by an identical request, IDEMPOTENCY_CONFLICT for a
+// changed one); an author, a stale revision, a decided ceremony and an
+// unadoptable candidate are refused; a human-class conflict needs a person
+// (#108, ADR-0025 §3).
 func TestConflicts(t *testing.T) {
 	host := newConflictHost()
 	handler := func(ctx context.Context, r *Request) (*protocol.InvokeResult, error) {
-		l, err := r.ConflictsList(ctx, "")
+		l, err := r.ConflictsList(ctx, "agent:reviewer", "")
 		if err != nil || len(l.Conflicts) != 2 {
 			t.Fatalf("list: %+v %v", l, err)
 		}
 		c := l.Conflicts[0]
-		if !c.AgentResolvable() || c.QuestionOpen() || !c.IsAuthor("agent:builder") || c.Candidate("b") == nil || !c.Candidate("a").Provisional {
+		if !c.Eligible() || !c.AgentResolvable() || c.QuestionOpen() || !c.IsAuthor("agent:builder") || !c.Candidate("a").Provisional {
 			t.Errorf("cer-7: %+v", c)
 		}
-		if h := l.Conflicts[1]; h.AgentResolvable() || !h.QuestionOpen() {
-			t.Errorf("cer-9 is human-class with a question open: %+v", h)
+		if b, base := c.Candidate("b"), c.Candidate("base"); !b.Adoptable || b.Record == nil || base.Adoptable || base.Refusal.Code != protocol.CodePresenceEnrolled {
+			t.Errorf("candidates: %+v %+v", b, base)
 		}
-		one, err := r.ConflictsList(ctx, "cer-9")
+		if h := l.Conflicts[1]; h.Eligible() || h.Refusal.Code != protocol.CodeHumanClassConflict || !h.QuestionOpen() || h.Candidate("a").Record != nil || h.Candidate("a").Adoptable {
+			t.Errorf("cer-9 is human-class with a question open and no records: %+v", h)
+		}
+		// agent:proxy is not an author, but its chain runs through one.
+		px, err := r.ConflictsList(ctx, "agent:proxy", "cer-7")
+		if err != nil || px.Conflicts[0].IsAuthor("agent:proxy") || px.Conflicts[0].Eligible() || px.Conflicts[0].Refusal.Code != protocol.CodeConflictOfInterest {
+			t.Errorf("chain conflict: %+v %v", px, err)
+		}
+		if px.Conflicts[0].Candidate("b").Adoptable {
+			t.Error("no candidate is adoptable for a refused principal")
+		}
+		one, err := r.ConflictsList(ctx, "agent:reviewer", "cer-9")
 		if err != nil || len(one.Conflicts) != 1 || one.Conflicts[0].ID != "cer-9" {
 			t.Errorf("list one: %+v %v", one, err)
 		}
@@ -187,13 +247,22 @@ func TestConflicts(t *testing.T) {
 		if err != nil || res.Disposition != protocol.DispositionHumanRequired || res.Code != protocol.CodeHumanClassConflict {
 			t.Errorf("human class: %+v %v", res, err)
 		}
+		res, err = r.ConflictResolve(ctx, protocol.HostConflictResolveParams{As: "agent:reviewer", Ceremony: "cer-7", Revision: 1, Adopt: "base", Rationale: "r", RequestID: "r-4"})
+		if err != nil || res.Code != protocol.CodePresenceEnrolled {
+			t.Errorf("unadoptable candidate: %+v %v", res, err)
+		}
 		p := protocol.HostConflictResolveParams{As: "agent:reviewer", Ceremony: "cer-7", Revision: 1, Adopt: "b", Rationale: "the withdrawal\r\nis later", RequestID: "r-3"}
 		res, err = r.ConflictResolve(ctx, p)
 		if err != nil || res.Disposition != protocol.DispositionAccepted || res.Result != "ADOPTED b" {
 			t.Errorf("resolve: %+v %v", res, err)
 		}
 		if again, err := r.ConflictResolve(ctx, p); err != nil || again.Disposition != res.Disposition || again.Result != res.Result || again.EventSeq != res.EventSeq {
-			t.Errorf("a replayed request id returns the recorded result: %+v %v", again, err)
+			t.Errorf("an identical request replays the recorded result: %+v %v", again, err)
+		}
+		changed := p
+		changed.Adopt = "a"
+		if _, err := r.ConflictResolve(ctx, changed); !protocol.IsIdempotencyConflict(err) {
+			t.Errorf("a reused request id with other parameters: %v", err)
 		}
 		d, err := r.ConflictDecline(ctx, protocol.HostConflictDeclineParams{As: "agent:reviewer", Ceremony: "cer-7", Revision: 1, Reason: "gone"})
 		if err != nil || d.Code != protocol.CodeConflictNotOpen {
@@ -236,8 +305,8 @@ func TestConflictDeclineRaisesOneQuestion(t *testing.T) {
 		if err != nil || d.Raised || d.Question != "amb-20" {
 			t.Errorf("second decline: %+v %v", d, err)
 		}
-		l, err := r.ConflictsList(ctx, "cer-7")
-		if err != nil || len(l.Conflicts) != 1 || !l.Conflicts[0].QuestionOpen() || l.Conflicts[0].AgentResolvable() {
+		l, err := r.ConflictsList(ctx, "agent:reviewer", "cer-7")
+		if err != nil || len(l.Conflicts) != 1 || !l.Conflicts[0].QuestionOpen() || l.Conflicts[0].AgentResolvable() || l.Conflicts[0].Refusal.Code != protocol.CodeQuestionOpen {
 			t.Errorf("after decline: %+v %v", l, err)
 		}
 		return nil, nil
@@ -254,7 +323,7 @@ func TestConflictsAreGatedAndValidated(t *testing.T) {
 	host := newConflictHost()
 	ok := protocol.HostConflictResolveParams{As: "agent:reviewer", Ceremony: "cer-7", Revision: 1, Adopt: "a", Rationale: "r", RequestID: "r-1"}
 	handler := func(ctx context.Context, r *Request) (*protocol.InvokeResult, error) {
-		if _, err := r.ConflictsList(ctx, ""); protocol.ErrorID(err) != protocol.ErrorIDPermissionDenied {
+		if _, err := r.ConflictsList(ctx, "agent:reviewer", ""); protocol.ErrorID(err) != protocol.ErrorIDPermissionDenied {
 			t.Errorf("list without conflicts.resolve: %v", err)
 		}
 		if _, err := r.ConflictResolve(ctx, ok); protocol.ErrorID(err) != protocol.ErrorIDPermissionDenied {
@@ -294,8 +363,11 @@ func TestConflictsAreGatedAndValidated(t *testing.T) {
 		if _, err := r.ConflictDecline(ctx, protocol.HostConflictDeclineParams{As: "a", Ceremony: "c", Revision: 1}); protocol.ErrorID(err) != protocol.CodeConflictRequestInvalid {
 			t.Errorf("decline without a reason: %v", err)
 		}
-		if _, err := r.ConflictsList(ctx, strings.Repeat("c", protocol.MaxConflictIDBytes+1)); protocol.ErrorID(err) != protocol.CodeConflictRequestInvalid {
+		if _, err := r.ConflictsList(ctx, "agent:reviewer", strings.Repeat("c", protocol.MaxConflictIDBytes+1)); protocol.ErrorID(err) != protocol.CodeConflictRequestInvalid {
 			t.Errorf("list with a long id: %v", err)
+		}
+		if _, err := r.ConflictsList(ctx, "", ""); protocol.ErrorID(err) != protocol.CodeConflictRequestInvalid {
+			t.Errorf("list without as: %v", err)
 		}
 		return nil, nil
 	}
@@ -303,4 +375,24 @@ func TestConflictsAreGatedAndValidated(t *testing.T) {
 	if len(host.calls) != 0 {
 		t.Fatalf("refused requests reached the host: %q", host.calls)
 	}
+}
+
+// TestConflictRecordsNeedStateRead: without state.read the host withholds
+// every record; summaries stay.
+func TestConflictRecordsNeedStateRead(t *testing.T) {
+	host := newConflictHost()
+	host.stateRead = false
+	handler := func(ctx context.Context, r *Request) (*protocol.InvokeResult, error) {
+		l, err := r.ConflictsList(ctx, "agent:reviewer", "cer-7")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range l.Conflicts[0].Candidates {
+			if c.Record != nil || c.Summary == "" {
+				t.Errorf("candidate %+v", c)
+			}
+		}
+		return nil, nil
+	}
+	runConflicts(t, []string{protocol.PermConflictsResolve}, host, handler)
 }

@@ -63,30 +63,61 @@ const (
 	MaxConflictIDBytes = 200
 )
 
-// Dispositions of a governed host act (HostActResult and the conflict
-// results). Only ACCEPTED changed governed state.
-const (
-	DispositionAccepted      = "ACCEPTED"
-	DispositionRejected      = "REJECTED"
-	DispositionBlocked       = "BLOCKED"
-	DispositionHumanRequired = "HUMAN_REQUIRED"
-)
-
-// Result codes of the conflict methods besides CodeConflictOfInterest,
-// CodeHumanClassConflict and CodeAuthorsUnknown (authority.go).
+// Result codes of the conflict methods. Besides these, the codes in
+// authority.go apply: CodeConflictOfInterest, CodeHumanClassConflict,
+// CodeAuthorsUnknown. The complete set core returns from
+// host/conflicts/resolve (N1, #108), each as a disposition with Code:
+//
+//	REJECTED        CONFLICT_NOT_OPEN, STALE_REVISION, CONFLICT_OF_INTEREST,
+//	                IDENTITY_DOWNGRADE, PRESENCE_ENROLLED,
+//	                RULES_REQUIRE_SETTINGS, INVALID_PAYLOAD (adopt names no
+//	                candidate), RATIONALE_REQUIRED
+//	HUMAN_REQUIRED  HUMAN_CLASS_CONFLICT, AUTHORS_UNKNOWN, QUESTION_OPEN,
+//	                HUMAN_REQUIRED (the project is below rules 3),
+//	                AUTHORITY_REVOKED (a candidate revokes authority: only a
+//	                person restores it), and the authority codes of a missing
+//	                or invalid ledger.resolve grant (AUTHORITY_MISSING,
+//	                AUTHORITY_EXPIRED, WRONG_SCOPE, DELEGATION_CHAIN_INVALID)
+//
+// host/conflicts/decline returns CONFLICT_NOT_OPEN, STALE_REVISION and
+// the authority codes. A reused request id with different parameters is
+// an error (CodeIdempotencyConflict), not a disposition.
 const (
 	// CodeConflictNotOpen (the contract core must implement for #108):
 	// the ceremony does not exist, is not a merge-conflict ceremony, or
-	// is no longer open (decided or cancelled). Nothing was recorded;
-	// list again. Disposition REJECTED.
-	CodeConflictNotOpen = "CONFLICT_NOT_OPEN"
-	// CodeStaleRevision: the ceremony (or its conflicted object) is not
-	// at the revision the request names. Nothing was recorded; list
+	// is no longer open (decided or cancelled). Nothing changed; list
 	// again. Disposition REJECTED.
+	CodeConflictNotOpen = "CONFLICT_NOT_OPEN"
+	// CodeStaleRevision: the ceremony is not at the revision the request
+	// names, or the conflicted object moved since the conflict was
+	// recorded. Nothing changed; list again. Disposition REJECTED.
 	CodeStaleRevision = "STALE_REVISION"
 	// CodeQuestionOpen: a conflict question names the ceremony, so only
 	// the person's resolution closes it. Disposition HUMAN_REQUIRED.
 	CodeQuestionOpen = "QUESTION_OPEN"
+	// CodeHumanRequired: only a person decides (below rules 3, or the
+	// agent's authority does not reach). Disposition HUMAN_REQUIRED.
+	CodeHumanRequired = "HUMAN_REQUIRED"
+	// Candidate refusals (ConflictCandidate.Refusal and resolve codes).
+	// CodeAuthorityRevoked: another candidate revokes the grant or
+	// binding, and an agent may not leave it in force (only a person
+	// restores revoked authority).
+	CodeAuthorityRevoked = "AUTHORITY_REVOKED"
+	// CodeIdentityDowngrade: the candidate drops a human's enrolled
+	// presence key that the other branch holds.
+	CodeIdentityDowngrade = "IDENTITY_DOWNGRADE"
+	// CodePresenceEnrolled: the candidate's branch made an untouched act
+	// needing a touch after the other branch enrolled the human's
+	// presence; it is never adopted.
+	CodePresenceEnrolled = "PRESENCE_ENROLLED"
+	// CodeRulesRequireSettings: the candidate project record raises the
+	// rules epoch without a human project.settings event.
+	CodeRulesRequireSettings = "RULES_REQUIRE_SETTINGS"
+	// CodeIdempotencyConflict: the request id was already used for a
+	// different request. An error (code CodeInvalidParams, id
+	// IDEMPOTENCY_CONFLICT), not a disposition; nothing changed. Mint a
+	// fresh request id for every new attempt.
+	CodeIdempotencyConflict = "IDEMPOTENCY_CONFLICT"
 	// CodeConflictRequestInvalid: a request breaks the shape rules
 	// below (an empty or over-long id, a revision below 1, not exactly
 	// one of adopt and keep, an empty, over-long or control-character
@@ -95,10 +126,17 @@ const (
 	CodeConflictRequestInvalid = "CONFLICT_REQUEST_INVALID"
 )
 
-// HostConflictsListParams lists the project's open merge-conflict
-// ceremonies, or only Ceremony when it is set (to re-read one before
-// resolving it).
+// IsIdempotencyConflict reports whether err is IDEMPOTENCY_CONFLICT.
+func IsIdempotencyConflict(err error) bool { return IsErrorID(err, CodeIdempotencyConflict) }
+
+// HostConflictsListParams lists, for principal As (required: a principal
+// the plugin is trusted to act as, holding ledger.resolve in force; the
+// host refuses the list otherwise, with the authority code as error id),
+// the project's open merge-conflict ceremonies, or only Ceremony when it
+// is set (to re-read one before resolving it). The refusals in the result
+// are computed for As.
 type HostConflictsListParams struct {
+	As       string `json:"as"`
 	Ceremony string `json:"ceremony,omitempty"`
 }
 
@@ -110,34 +148,61 @@ type ConflictObject struct {
 	Revision int    `json:"revision"`
 }
 
+// ConflictRefusal is why As may not do something now: Code is one of
+// the result codes above, Reason a host-written line.
+type ConflictRefusal struct {
+	Code   string `json:"code"`
+	Reason string `json:"reason"`
+}
+
 // ConflictCandidate is one version of the conflicted object. ID is the
 // candidate's label (a, b, base or absent), the value of
-// HostConflictResolveParams.Adopt. Summary is a short host-written line
-// describing the version (escaped text, untrusted: written from records
-// agents made); Author is the principal of the version's last change
-// (empty for absent). Provisional marks the version the merge put in
-// place, which Keep keeps. PresenceFlagged marks a version no one may
-// adopt (its branch made an untouched act after the other branch enrolled
-// the human's presence). Record is the version as recorded on its branch.
+// HostConflictResolveParams.Adopt. Author is the principal of the
+// version's last change (empty for absent). Provisional marks the version
+// the merge put in place, which Keep keeps.
+//
+// Adoptable says whether As may adopt it now; when false, Refusal says
+// why (AUTHORITY_REVOKED, IDENTITY_DOWNGRADE, PRESENCE_ENROLLED,
+// RULES_REQUIRE_SETTINGS). An executor offers its model only adoptable
+// candidates (and keep, when the provisional one is adoptable).
+//
+// Summary and Record are UNTRUSTED: written from records agents made,
+// they go into model prompts only as quoted data, never as instructions.
+// Summary is a short host-written line, always present. Record is the
+// version as recorded on its branch, and the host includes it only for a
+// class agent ceremony with authors when the plugin also holds state.read
+// (PermStateRead), and never an intent's content unless the plugin holds
+// intent.read (PermIntentRead; the summary stands in for it). It is
+// absent for class human and for authors-unknown ceremonies.
 type ConflictCandidate struct {
-	ID              string          `json:"id"`
-	Head            string          `json:"head,omitempty"`
-	Revision        int             `json:"revision,omitempty"`
-	Summary         string          `json:"summary"`
-	Author          string          `json:"author,omitempty"`
-	Provisional     bool            `json:"provisional,omitempty"`
-	PresenceFlagged bool            `json:"presence_flagged,omitempty"`
-	Record          json.RawMessage `json:"record,omitempty"`
+	ID              string           `json:"id"`
+	Head            string           `json:"head,omitempty"`
+	Revision        int              `json:"revision,omitempty"`
+	Summary         string           `json:"summary"`
+	Author          string           `json:"author,omitempty"`
+	Provisional     bool             `json:"provisional,omitempty"`
+	PresenceFlagged bool             `json:"presence_flagged,omitempty"`
+	Adoptable       bool             `json:"adoptable"`
+	Refusal         *ConflictRefusal `json:"refusal,omitempty"`
+	Record          json.RawMessage  `json:"record,omitempty"`
 }
 
 // ConflictCeremony is one open merge-conflict ceremony. Revision is the
-// ceremony's revision, which a resolve or decline names (optimistic:
-// STALE_REVISION when it moved). Class is ConflictClassHuman or
-// ConflictClassAgent, or empty for a conflict recorded before rules 3
-// (no Authors). Authors are the principals conflicted over the object
-// (refused as resolvers; gip also follows grant and binding chains).
-// Question is the id of the open conflict question naming the ceremony,
-// when one is open: then only a person resolves it.
+// ceremony record's own revision (not the conflicted object's, which is
+// Object.Revision); a resolve or decline names it. Class is
+// ConflictClassHuman or ConflictClassAgent, or empty for a conflict
+// recorded before rules 3 (no Authors). Authors are the principals the
+// merge recorded as conflicted over the object. Question is the id of the
+// open conflict question naming the ceremony, when one is open.
+//
+// Refusal is gip's verdict for As now (core's ResolverRefusal at the
+// current state: CONFLICT_OF_INTEREST including grant and binding chains
+// through an author, HUMAN_CLASS_CONFLICT, AUTHORS_UNKNOWN,
+// QUESTION_OPEN); nil means As may resolve it. A plugin decides from
+// Refusal, never from Authors (IsAuthor is display only). On
+// CONFLICT_OF_INTEREST the agent should skip the ceremony, not decline
+// it: an independent agent may still resolve it, and declining would hand
+// a person what an agent can decide.
 type ConflictCeremony struct {
 	ID         string              `json:"id"`
 	Revision   int                 `json:"revision"`
@@ -147,13 +212,20 @@ type ConflictCeremony struct {
 	Candidates []ConflictCandidate `json:"candidates"`
 	Authors    []string            `json:"authors,omitempty"`
 	Question   string              `json:"question,omitempty"`
+	Refusal    *ConflictRefusal    `json:"refusal,omitempty"`
 }
 
 // QuestionOpen reports whether a conflict question asks the person.
 func (c *ConflictCeremony) QuestionOpen() bool { return c != nil && c.Question != "" }
 
-// IsAuthor reports whether principal is among the conflict's authors
-// (display and filtering only; gip's test is wider, ADR-0025 D4).
+// Eligible reports whether the listing principal may resolve the
+// conflict now (no Refusal). The resolve is still checked by the gateway.
+func (c *ConflictCeremony) Eligible() bool { return c != nil && c.Refusal == nil }
+
+// IsAuthor reports whether principal is among the recorded authors. It
+// is for display only: gip's conflict-of-interest test also follows
+// grant and binding chains (ADR-0025 D4), which Refusal reflects and this
+// does not.
 func (c *ConflictCeremony) IsAuthor(principal string) bool {
 	if c == nil {
 		return false
@@ -166,9 +238,9 @@ func (c *ConflictCeremony) IsAuthor(principal string) bool {
 	return false
 }
 
-// AgentResolvable reports whether an agent may resolve the conflict at
+// AgentResolvable reports whether any agent may resolve the conflict at
 // all: authors recorded, class agent and no conflict question open.
-// Whether a given agent may is gip's decision.
+// Whether the listing principal may is Eligible.
 func (c *ConflictCeremony) AgentResolvable() bool {
 	return c != nil && len(c.Authors) > 0 && c.Class == ConflictClassAgent && c.Question == ""
 }
@@ -192,12 +264,19 @@ type HostConflictsListResult struct {
 	Conflicts []ConflictCeremony `json:"conflicts"`
 }
 
-// HostConflictResolveParams decides merge-conflict ceremony Ceremony at
-// revision Revision as principal As: Adopt names the candidate to adopt
-// (ConflictCandidate.ID), or Keep keeps the provisional merged version;
-// exactly one. gip maps it to ceremony.decide (approve with adopt, or
-// reject). Rationale is required. RequestID is the idempotency key:
-// re-sending it replays the recorded result.
+// HostConflictResolveParams decides merge-conflict ceremony Ceremony as
+// principal As: Adopt names the candidate to adopt (ConflictCandidate.ID),
+// or Keep keeps the provisional merged version; exactly one. gip maps it
+// to ceremony.decide (approve with adopt, or reject). Revision is the
+// ceremony's revision (ConflictCeremony.Revision) as listed; a moved
+// ceremony or a moved conflicted object is STALE_REVISION. Rationale is
+// required.
+//
+// RequestID (required) identifies this attempt: mint a fresh one for
+// every attempt, and after any re-list. Re-sending an identical request
+// with the same id (resuming after a crash) replays the recorded result;
+// the same id with different parameters is an IDEMPOTENCY_CONFLICT error
+// and changes nothing.
 type HostConflictResolveParams struct {
 	As        string `json:"as"`
 	Ceremony  string `json:"ceremony"`
@@ -219,10 +298,14 @@ type HostConflictResolveResult struct {
 }
 
 // HostConflictDeclineParams declines merge-conflict ceremony Ceremony at
-// revision Revision as principal As, for Reason (required). The gateway
-// raises the blocking conflict question for the ceremony, or, when one
-// is already open, records nothing and returns it: one question per
-// ceremony, whoever declines. RequestID is optional.
+// its revision Revision as principal As, for Reason (required). The
+// gateway raises the blocking conflict question for the ceremony, or,
+// when one is already open, changes nothing and returns it: one question
+// per ceremony, whoever declines. RequestID follows the rules of
+// HostConflictResolveParams.RequestID; when it is absent the host derives
+// it from (Ceremony, As, Revision), so a repeated decline of the same
+// revision by the same principal replays. Decline only when Refusal is
+// nil or the agent cannot choose; skip a CONFLICT_OF_INTEREST ceremony.
 type HostConflictDeclineParams struct {
 	As        string `json:"as"`
 	Ceremony  string `json:"ceremony"`
@@ -302,6 +385,9 @@ func validConflictTarget(as, ceremony string, revision int) error {
 
 // Validate checks the request's shape.
 func (p *HostConflictsListParams) Validate() error {
+	if err := validConflictID("as", p.As, true); err != nil {
+		return err
+	}
 	return validConflictID("ceremony", p.Ceremony, false)
 }
 

@@ -635,6 +635,16 @@ func (p *HostActParams) ValidateTarget() error {
 	return nil
 }
 
+// Dispositions of a governed host act (HostActResult.Disposition and the
+// other host act results, gip's core.Disposition). Only ACCEPTED changed
+// governed state.
+const (
+	DispositionAccepted      = "ACCEPTED"
+	DispositionRejected      = "REJECTED"
+	DispositionBlocked       = "BLOCKED"
+	DispositionHumanRequired = "HUMAN_REQUIRED"
+)
+
 // HostActResult is the gateway's disposition.
 type HostActResult struct {
 	Disposition string   `json:"disposition"`

@@ -14,9 +14,8 @@ import (
 // permission: without it the helper returns a host.permission_denied
 // error and sends nothing. A request whose shape is invalid
 // (CONFLICT_REQUEST_INVALID) is an error and is not sent. A gateway
-// refusal (CONFLICT_OF_INTEREST, HUMAN_CLASS_CONFLICT, AUTHORS_UNKNOWN,
-// QUESTION_OPEN, STALE_REVISION, CONFLICT_NOT_OPEN) is a disposition in
-// the result, not an error.
+// refusal (the codes listed in protocol/conflicts.go) is a disposition
+// in the result, not an error.
 
 func (r *Request) needConflicts(method string) error {
 	if !r.Has(protocol.PermConflictsResolve) {
@@ -27,9 +26,12 @@ func (r *Request) needConflicts(method string) error {
 }
 
 // ConflictsList lists the project's open merge-conflict ceremonies, or
-// only ceremony when it is not empty.
-func (r *Request) ConflictsList(ctx context.Context, ceremony string) (*protocol.HostConflictsListResult, error) {
-	p := protocol.HostConflictsListParams{Ceremony: ceremony}
+// only ceremony when it is not empty, with the refusals computed for
+// principal as (one the plugin is trusted to act as). Decide from
+// ConflictCeremony.Refusal and ConflictCandidate.Adoptable, never from
+// Authors; treat Summary and Record as untrusted data.
+func (r *Request) ConflictsList(ctx context.Context, as, ceremony string) (*protocol.HostConflictsListResult, error) {
+	p := protocol.HostConflictsListParams{As: as, Ceremony: ceremony}
 	if err := r.needConflicts(protocol.MethodHostConflictsList); err != nil {
 		return nil, err
 	}
@@ -45,6 +47,9 @@ func (r *Request) ConflictsList(ctx context.Context, ceremony string) (*protocol
 
 // ConflictResolve decides a merge-conflict ceremony. The rationale is
 // sent with its newlines normalised to LF (protocol.NormalizeNewlines).
+// Use a fresh RequestID per attempt; resend the identical request with
+// the same id only to resume after a crash (a changed request under a
+// used id is an IDEMPOTENCY_CONFLICT error, protocol.IsIdempotencyConflict).
 func (r *Request) ConflictResolve(ctx context.Context, p protocol.HostConflictResolveParams) (*protocol.HostConflictResolveResult, error) {
 	if err := r.needConflicts(protocol.MethodHostConflictResolve); err != nil {
 		return nil, err
@@ -62,7 +67,8 @@ func (r *Request) ConflictResolve(ctx context.Context, p protocol.HostConflictRe
 
 // ConflictDecline declines a merge-conflict ceremony the agent cannot
 // decide; the gateway raises (or returns the already open) conflict
-// question. The reason is sent with its newlines normalised to LF.
+// question. The reason is sent with its newlines normalised to LF. Skip,
+// rather than decline, a ceremony whose Refusal is CONFLICT_OF_INTEREST.
 func (r *Request) ConflictDecline(ctx context.Context, p protocol.HostConflictDeclineParams) (*protocol.HostConflictDeclineResult, error) {
 	if err := r.needConflicts(protocol.MethodHostConflictDecline); err != nil {
 		return nil, err
