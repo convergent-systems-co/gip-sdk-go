@@ -182,13 +182,15 @@ gip issue #108 (ADR-0025 §3, D4, D5; spec LM-026 to LM-028) lets a plugin actin
 | `host/conflicts/resolve {as, ceremony, revision, adopt \| keep, rationale, request_id}` | `ConflictResolve` |
 | `host/conflicts/decline {as, ceremony, revision, reason, request_id?}` | `ConflictDecline` |
 
-**List.** `as` is required: the host checks that the plugin is trusted to act as it and that it holds `ledger.resolve` in force. Each `ConflictCeremony` carries:
+**List.** `as` is required: the host checks that the plugin is trusted to act as it and that it holds `ledger.resolve` in force. Otherwise the list fails with JSON-RPC error `CodePermissionDenied`, whose `data.id` is the grant code (`AUTHORITY_MISSING` and the others below). Each `ConflictCeremony` carries:
 
 - `id` and `revision` (the ceremony record's own revision);
 - `object {kind, id, revision}` (the conflicted object, at the revision the conflict was recorded);
 - `class` (`human`, `agent`, or empty before rules 3), `codes`, `authors`, and `question` when a conflict question asks the person;
 - `refusal {code, reason}`: gip's verdict for `as` now (core's `ResolverRefusal`: `CONFLICT_OF_INTEREST` including grant and binding chains, `HUMAN_CLASS_CONFLICT`, `AUTHORS_UNKNOWN`, `QUESTION_OPEN`). Absent means `as` may resolve it (`Eligible`);
-- `candidates`, each with `id` (a, b, base or absent), `summary`, `author`, `provisional`, `presence_flagged`, `adoptable` and a `refusal` (`AUTHORITY_REVOKED`, `IDENTITY_DOWNGRADE`, `PRESENCE_ENROLLED`, `RULES_REQUIRE_SETTINGS`). Offer a model only adoptable candidates.
+- `candidates`, each with `id` (a, b, base or absent), `summary`, `author`, `provisional`, `presence_flagged`, `adoptable` and a `refusal` (`AUTHORITY_REVOKED`, `IDENTITY_DOWNGRADE`, `PRESENCE_ENROLLED`, `RULES_REQUIRE_SETTINGS`). `adoptable` false with no candidate `refusal` means the ceremony's `refusal` applies.
+
+Offer a model the adoptable candidates and, whenever the ceremony is eligible, `keep`. Keep runs no candidate checks: core's reject path keeps the provisional version as it is.
 
 Decide from `refusal` and `adoptable`. `IsAuthor` is for display only, because it cannot see chains.
 
@@ -205,10 +207,15 @@ Decide from `refusal` and `adoptable`. `IsAuthor` is for display only, because i
 
 | Disposition | Codes from resolve |
 |---|---|
-| `REJECTED` | `CONFLICT_NOT_OPEN` (no such open merge-conflict ceremony; core implements it for #108), `STALE_REVISION`, `CONFLICT_OF_INTEREST`, `IDENTITY_DOWNGRADE`, `PRESENCE_ENROLLED`, `RULES_REQUIRE_SETTINGS`, `INVALID_PAYLOAD`, `RATIONALE_REQUIRED` |
-| `HUMAN_REQUIRED` | `HUMAN_CLASS_CONFLICT`, `AUTHORS_UNKNOWN`, `QUESTION_OPEN`, `HUMAN_REQUIRED` (below rules 3), `AUTHORITY_REVOKED`, and the grant codes `AUTHORITY_MISSING`, `AUTHORITY_EXPIRED`, `WRONG_SCOPE`, `DELEGATION_CHAIN_INVALID` |
+| `REJECTED` | `CONFLICT_NOT_OPEN` (no such open merge-conflict ceremony; core implements it for #108), `STALE_REVISION`, `NOT_FOUND` (the conflicted object is gone), `CONFLICT_OF_INTEREST`, `IDENTITY_DOWNGRADE`, `PRESENCE_ENROLLED`, `RULES_REQUIRE_SETTINGS`, `INVALID_PAYLOAD` (adopt names no candidate), `INVALID_RESULT` (the candidates do not decode), `RATIONALE_REQUIRED` |
+| `HUMAN_REQUIRED` | `HUMAN_CLASS_CONFLICT`, `AUTHORS_UNKNOWN`, `QUESTION_OPEN`, `HUMAN_REQUIRED` (below rules 3), and the grant codes `AUTHORITY_MISSING`, `AUTHORITY_EXPIRED`, `AUTHORITY_REVOKED`, `WRONG_SCOPE`, `DELEGATION_CHAIN_INVALID` |
 
-Decline returns `CONFLICT_NOT_OPEN`, `STALE_REVISION` and the grant codes.
+| Disposition | Codes from decline |
+|---|---|
+| `REJECTED` | `CONFLICT_NOT_OPEN`, `STALE_REVISION`, `RATIONALE_REQUIRED` (a blank reason), `NO_INTENT_FOR_QUESTION` (the project has no intent: no question can be raised; a person decides with `gip ceremony decide`; core implements it for #108) |
+| `HUMAN_REQUIRED` | `HUMAN_REQUIRED` (below rules 3) and the grant codes |
+
+`AUTHORITY_REVOKED` has two meanings, both `HUMAN_REQUIRED`. As a candidate refusal (and on resolve), another candidate revokes the conflicted grant or binding, and an agent may not leave it in force. As a grant code, the resolver's own `ledger.resolve` grant was revoked.
 
 **Limits.** The helpers check the shape before sending and refuse with `CONFLICT_REQUEST_INVALID` (`CodeInvalidParams`), sending nothing:
 

@@ -68,20 +68,32 @@ const (
 // CodeAuthorsUnknown. The complete set core returns from
 // host/conflicts/resolve (N1, #108), each as a disposition with Code:
 //
-//	REJECTED        CONFLICT_NOT_OPEN, STALE_REVISION, CONFLICT_OF_INTEREST,
+//	REJECTED        CONFLICT_NOT_OPEN, STALE_REVISION, NOT_FOUND (the
+//	                conflicted object is gone), CONFLICT_OF_INTEREST,
 //	                IDENTITY_DOWNGRADE, PRESENCE_ENROLLED,
 //	                RULES_REQUIRE_SETTINGS, INVALID_PAYLOAD (adopt names no
-//	                candidate), RATIONALE_REQUIRED
+//	                candidate), INVALID_RESULT (the ceremony's candidates
+//	                do not decode), RATIONALE_REQUIRED
 //	HUMAN_REQUIRED  HUMAN_CLASS_CONFLICT, AUTHORS_UNKNOWN, QUESTION_OPEN,
 //	                HUMAN_REQUIRED (the project is below rules 3),
-//	                AUTHORITY_REVOKED (a candidate revokes authority: only a
-//	                person restores it), and the authority codes of a missing
+//	                AUTHORITY_REVOKED (either meaning, see
+//	                CodeAuthorityRevoked), and the grant codes of a missing
 //	                or invalid ledger.resolve grant (AUTHORITY_MISSING,
-//	                AUTHORITY_EXPIRED, WRONG_SCOPE, DELEGATION_CHAIN_INVALID)
+//	                AUTHORITY_EXPIRED, AUTHORITY_REVOKED, WRONG_SCOPE,
+//	                DELEGATION_CHAIN_INVALID)
 //
-// host/conflicts/decline returns CONFLICT_NOT_OPEN, STALE_REVISION and
-// the authority codes. A reused request id with different parameters is
-// an error (CodeIdempotencyConflict), not a disposition.
+// host/conflicts/decline returns, as a disposition with Code:
+//
+//	REJECTED        CONFLICT_NOT_OPEN, STALE_REVISION, RATIONALE_REQUIRED
+//	                (a blank reason), NO_INTENT_FOR_QUESTION
+//	HUMAN_REQUIRED  HUMAN_REQUIRED (the project is below rules 3), and the
+//	                grant codes above
+//
+// host/conflicts/list answers a refused As with a JSON-RPC error, code
+// CodePermissionDenied, whose data.id is the grant code
+// (AUTHORITY_MISSING and the others above; ErrorID matches it). A reused
+// request id with different parameters is an error
+// (CodeIdempotencyConflict), not a disposition.
 const (
 	// CodeConflictNotOpen (the contract core must implement for #108):
 	// the ceremony does not exist, is not a merge-conflict ceremony, or
@@ -99,9 +111,14 @@ const (
 	// agent's authority does not reach). Disposition HUMAN_REQUIRED.
 	CodeHumanRequired = "HUMAN_REQUIRED"
 	// Candidate refusals (ConflictCandidate.Refusal and resolve codes).
-	// CodeAuthorityRevoked: another candidate revokes the grant or
-	// binding, and an agent may not leave it in force (only a person
-	// restores revoked authority).
+	// CodeAuthorityRevoked has two meanings, both HUMAN_REQUIRED: as a
+	// candidate refusal (and on resolve), another candidate revokes the
+	// conflicted grant or binding and an agent may not leave it in force
+	// (only a person restores revoked authority; Keep, whose provisional
+	// version is the revoked one, and adopting the revoking candidate stay
+	// open to the agent); as a grant code (on list,
+	// resolve and decline), the resolver's own ledger.resolve grant was
+	// revoked.
 	CodeAuthorityRevoked = "AUTHORITY_REVOKED"
 	// CodeIdentityDowngrade: the candidate drops a human's enrolled
 	// presence key that the other branch holds.
@@ -118,6 +135,21 @@ const (
 	// IDEMPOTENCY_CONFLICT), not a disposition; nothing changed. Mint a
 	// fresh request id for every new attempt.
 	CodeIdempotencyConflict = "IDEMPOTENCY_CONFLICT"
+	// CodeNoIntentForQuestion (the contract core must implement for
+	// #108): a decline in a project with no intent. No question can be
+	// raised; a person decides with gip ceremony decide. Nothing changed.
+	// Disposition REJECTED.
+	CodeNoIntentForQuestion = "NO_INTENT_FOR_QUESTION"
+	// Grant codes (gip's governance decision codes) for a missing or
+	// invalid ledger.resolve grant, with CodeAuthorityRevoked and
+	// CodeHumanRequired.
+	CodeAuthorityMissing       = "AUTHORITY_MISSING"
+	CodeAuthorityExpired       = "AUTHORITY_EXPIRED"
+	CodeWrongScope             = "WRONG_SCOPE"
+	CodeDelegationChainInvalid = "DELEGATION_CHAIN_INVALID"
+	// CodeRationaleRequired: a blank rationale or reason reached the
+	// gateway. Disposition REJECTED.
+	CodeRationaleRequired = "RATIONALE_REQUIRED"
 	// CodeConflictRequestInvalid: a request breaks the shape rules
 	// below (an empty or over-long id, a revision below 1, not exactly
 	// one of adopt and keep, an empty, over-long or control-character
@@ -131,7 +163,8 @@ func IsIdempotencyConflict(err error) bool { return IsErrorID(err, CodeIdempoten
 
 // HostConflictsListParams lists, for principal As (required: a principal
 // the plugin is trusted to act as, holding ledger.resolve in force; the
-// host refuses the list otherwise, with the authority code as error id),
+// host refuses the list otherwise with a JSON-RPC error, code
+// CodePermissionDenied, data.id the grant code such as AUTHORITY_MISSING),
 // the project's open merge-conflict ceremonies, or only Ceremony when it
 // is set (to re-read one before resolving it). The refusals in the result
 // are computed for As.
@@ -161,10 +194,14 @@ type ConflictRefusal struct {
 // version's last change (empty for absent). Provisional marks the version
 // the merge put in place, which Keep keeps.
 //
-// Adoptable says whether As may adopt it now; when false, Refusal says
-// why (AUTHORITY_REVOKED, IDENTITY_DOWNGRADE, PRESENCE_ENROLLED,
-// RULES_REQUIRE_SETTINGS). An executor offers its model only adoptable
-// candidates (and keep, when the provisional one is adoptable).
+// Adoptable says whether As may adopt it now. When it is false, Refusal
+// says why (AUTHORITY_REVOKED, IDENTITY_DOWNGRADE, PRESENCE_ENROLLED,
+// RULES_REQUIRE_SETTINGS); a nil Refusal means the candidate itself is
+// fine and the ceremony's Refusal applies. Keep runs no candidate checks
+// (core's reject path keeps the provisional version as it is), so Keep is
+// available whenever the ceremony is Eligible, whatever the provisional
+// candidate's Adoptable. An executor offers its model the adoptable
+// candidates and, when the ceremony is Eligible, keep.
 //
 // Summary and Record are UNTRUSTED: written from records agents made,
 // they go into model prompts only as quoted data, never as instructions.
