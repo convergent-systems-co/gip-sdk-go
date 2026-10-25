@@ -229,6 +229,16 @@ Decide from `refusal` and `adoptable`. `IsAuthor` is for display only, because i
 
 `FindingKindPrerequisite` (`"prerequisite"`) is a finding kind for missing prerequisite work (a seam, protocol, package or capability that does not exist yet). It is always blocking and is never a decision: the planner derives work units for it and the dependent node `depends_on` them; only genuine decisions go to the owner (governed-intent-programming#147). `HostFindingParams.Provides` and `PlanFinding.Provides` (optional, `provides`) name what the prerequisite supplies so an existing unit can be matched. Fields are additive. A gip built against an earlier SDK drops `provides`, but refuses kind `prerequisite` (`INVALID_PAYLOAD`), so send it only to a host that supports it. Also: the decline refusal codes `CONFLICT_OF_INTEREST`, `HUMAN_CLASS_CONFLICT` and `AUTHORS_UNKNOWN` are documented in `protocol/conflicts.go` (no wire change).
 
+### Rules, outside invariants, covering node (v0.12.1)
+
+Three optional, additive fields; `protocol.Version` is unchanged and nothing is renamed.
+
+- `PlanDocument.Rules` (`rules`, int): the project's rules epoch; in-pass questions are supported at rules 2 and later (core#59). Plugins should prefer it to matching `human_due.reason`. There is no separate boolean: the JSON name `questions` is already the open-question list. Core main does not emit them yet; until it does they stay zero, so fall back to the old check only when `Rules` is 0. Reading is safe on any core: an older core simply omits them.
+- `HostActParams.OutsideInvariants` (`outside_invariants`, `[]InvariantRef{ID, Revision}`): on a review rejection, the invariants the change falls outside. An older core ignores it (host/act params are decoded leniently, and core main still derives the list from `INVARIANT_OUTSIDE` lines in the rationale), so on such a core cite them in the rationale as before.
+- `FindingResolution.CoveredBy` (`covered_by`): the node (address or pass ref) covering a prerequisite finding dismissed as `duplicate` or `done` (PLAN-039). **An older core refuses it**: a plan pass is decoded strictly (`DisallowUnknownFields`), so the pass fails with an unknown-field error. Send it only to a core that supports it.
+
+Older-core summary: `rules` is only read, never sent (no risk); `outside_invariants` is ignored; `covered_by` is refused. Core's strict decoding also covers plan.find payloads (`FindFields`) and ceremony decisions, but this release adds no field to either.
+
 ## License
 
 [PolyForm Noncommercial 1.0.0](LICENSE). Commercial use requires a separate license from Convergent Systems.

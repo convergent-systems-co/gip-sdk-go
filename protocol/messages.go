@@ -141,6 +141,14 @@ type InvokeResult struct {
 	Cost      []CostEntry     `json:"cost,omitempty"`
 }
 
+// InvariantRef names a governing invariant (SDK v0.12.1), as core's
+// core.InvariantRef does on the wire. Revision 0 (omitted) means the
+// invariant's effective revision.
+type InvariantRef struct {
+	ID       string `json:"id"`
+	Revision int    `json:"revision,omitempty"`
+}
+
 // Proposal is a candidate a plugin offers to the core. Kind is one of the
 // proposal kinds below; Body is kind-specific and validated by the core.
 type Proposal struct {
@@ -596,6 +604,11 @@ type HostActParams struct {
 	// answer. Omitted when empty; an older gip ignores it, and refuses
 	// ledgers containing decision.unreviewable.
 	Unreviewable string `json:"unreviewable,omitempty"`
+	// OutsideInvariants, on a review with Outcome ReviewReject (SDK
+	// v0.12.1), names the governing invariants the change falls outside
+	// (core's outside_invariants). Omitted when empty. An older gip
+	// ignores it; use INVARIANT_OUTSIDE lines in the rationale there.
+	OutsideInvariants []InvariantRef `json:"outside_invariants,omitempty"`
 	// Evidence, on review, optionally names evidence records the
 	// decision relies on (and on goal.qualify and goal.accept, the goal's).
 	Evidence []string `json:"evidence,omitempty"`
