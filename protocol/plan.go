@@ -321,7 +321,13 @@ type PlanDocument struct {
 	// HumanDue (SDK v0.9.0) says whether the person is due to be asked.
 	// Executors stop electing while it is due, and report it.
 	HumanDue *HumanDue `json:"human_due,omitempty"`
-	Digest   string    `json:"digest"`
+	// Rules (SDK v0.12.1, gip#59) is the project's rules epoch (1, 2, 3).
+	// Absent (0) from a gip that does not emit it: fall back to the text
+	// of HumanDue.Reason only then.
+	Rules int `json:"rules,omitempty"`
+	// In-pass questions are supported when Rules >= 2. (No separate bool:
+	// the json name "questions" is the open-question list above.)
+	Digest string `json:"digest"`
 }
 
 // MaxDesignBytes bounds a plan design document (SDK v0.7.0): 64 KiB of
@@ -525,6 +531,11 @@ type FindingResolution struct {
 	Dismiss  string   `json:"dismiss,omitempty"`
 	Grounds  string   `json:"grounds,omitempty"`
 	Question string   `json:"question,omitempty"`
+	// CoveredBy (SDK v0.12.1, gip-sdk-go#22) names the node that covers a
+	// prerequisite finding dismissed as duplicate or done (core PLAN-039):
+	// a node address or a ref of this pass. Omitted when empty. An older
+	// gip refuses it (INVALID_PAYLOAD: unknown field).
+	CoveredBy string `json:"covered_by,omitempty"`
 }
 
 // Dismissal grounds (SDK v0.9.0).
