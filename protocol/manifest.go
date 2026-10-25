@@ -64,6 +64,12 @@ type Command struct {
 	// the host's default (for example an executor driving a model). The
 	// host may cap it.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// Role (SDK v0.12.2) names a contract the command fulfils so gip can
+	// find it without knowing its name, for example RoleIntentReview. A
+	// role must be one of KnownCommandRoles, sit on a leaf command, be
+	// backed by its capability (RoleCapability) and have its shape
+	// (CheckRoleShape). At most one command per manifest has each role.
+	Role string `json:"role,omitempty"`
 }
 
 // Argument declares one typed command argument. Positional arguments are
@@ -112,13 +118,14 @@ const (
 	// CapPlanWork (SDK v0.4.0): the plugin plans the frontier through
 	// host/plan/pass (gip ADR-0021).
 	CapPlanWork = "plan.work"
+	// CapReviewIntent (SDK v0.12.2) is declared in intentreview.go.
 )
 
 // KnownCapabilities is the closed set accepted by protocol v1.
 var KnownCapabilities = []string{
 	CapProposeIntentInterpretation, CapProposeGoals, CapProposeInvariants,
 	CapProposeWork, CapProposeGraphRules, CapProduceEvidence, CapExecuteWork,
-	CapVisualize, CapPlanWork,
+	CapVisualize, CapPlanWork, CapReviewIntent,
 }
 
 // ReservedCapabilityPrefixes name powers only the core holds. A manifest
@@ -257,6 +264,7 @@ func (m *Manifest) Validate() error {
 		seen[c.Name] = true
 		errs = append(errs, validateCommand(c, []string{c.Name}, m.Permissions)...)
 	}
+	errs = append(errs, m.validateRoles()...)
 	prefix := "gip.plugin." + strings.ReplaceAll(m.ShortName(), "-", "_") + "."
 	for _, k := range m.Telemetry.Attributes {
 		if !attrKeyRE.MatchString(k) || !strings.HasPrefix(k, prefix) {

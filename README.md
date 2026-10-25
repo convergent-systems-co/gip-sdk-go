@@ -12,7 +12,7 @@ go get github.com/convergent-systems-co/gip-sdk-go@latest
 |---|---|
 | `protocol` | The `gip-plugin.json` manifest (schema `gip.plugin-manifest/v1`) and its validation; JSON-RPC 2.0 messages over NDJSON on stdin/stdout; the typed argument parser the gip host also uses |
 | `gipplugin` | `Serve(manifest, handlers)` for implementing a plugin; telemetry, host calls (intent, state, executor, plan, delivery, plugin data, merge conflicts), structured errors, and `Command` for starting child processes without the protocol channel |
-| `conformance` | `conformance.Run(ctx, dir)`, protocol checks CNF-001 to CNF-008 for a built plugin directory |
+| `conformance` | `conformance.Run(ctx, dir)`, protocol checks CNF-001 to CNF-009 (CNF-009, role command shapes, only when a role or `review.intent` is declared) for a built plugin directory |
 
 Rules a plugin must follow:
 
@@ -238,6 +238,26 @@ Three optional, additive fields; `protocol.Version` is unchanged and nothing is 
 - `FindingResolution.CoveredBy` (`covered_by`): the node (address or pass ref) covering a prerequisite finding dismissed as `duplicate` or `done` (PLAN-039). **An older core refuses it**: a plan pass is decoded strictly (`DisallowUnknownFields`), so the pass fails with an unknown-field error. Send it only to a core that supports it.
 
 Older-core summary: `rules` is only read, never sent (no risk); `outside_invariants` is ignored; `covered_by` is refused. Core's strict decoding also covers plan.find payloads (`FindFields`) and ceremony decisions, but this release adds no field to either.
+
+### Intent review (v0.12.2)
+
+When a person runs `gip intent set`, gip asks a reviewing plugin to inspect the intent revision for contradictions, gaps, ambiguities and conflicts (with goals, invariants or the repository), each phrased as a question with a recommended answer. **gip drives the interactive loop**: it records each finding as an intent question and asks the person one at a time, blocking first. **A plugin never prompts the person**; it only returns findings.
+
+This release is additive and is numbered v0.12.2, not v0.13.0, because governed-intent-programming ADR-0026 reserves v0.13.0 for the brownfield types. `protocol.Version` is unchanged.
+
+- **Capability** `review.intent` (`CapReviewIntent`) and **command role** `intent.review` (`RoleIntentReview`). `Command.Role` (`role`, optional) is new: a role must be in `KnownCommandRoles`, sit on a leaf command, be backed by its capability (`RoleCapability`), and have its shape (`CheckRoleShape`). At most one command per manifest has each role, and a plugin declaring `review.intent` must give some command `intent.review`. `Manifest.CommandForRole(role)` finds it. Conformance check CNF-009 reports the same, without invoking the command.
+- **Command shape.** One required string argument `request` (`IntentReviewRequestArg`) holding the JSON `IntentReviewRequest`; no other required argument. gip builds it with `IntentReviewRequest.Arguments()`; the plugin reads it with `DecodeIntentReviewRequest(args)`. The command returns the `IntentReviewResult` as `InvokeResult.Output`, and reports model use in `InvokeResult.Cost` as any command does.
+- **Request** `{intent, revision, content, open_questions, deferred_questions, answered_questions, goals, invariants, repo_summary, max_questions, round}`. Questions are `PlanQuestion`s (gip sets `id`, `text`, `refs`); the reviewer must not raise them again. `goals` and `invariants` are the `host/state` shapes. `max_questions` is 1 to 20; `round` counts from 1.
+- **Result** `{findings: [...], reviewers: [{planner, model}]}`; `findings` is `[]` when nothing new was found. Each finding is `{kind, spans, question, options, recommended, blocking, rank, rationale}`:
+  - `kind`: `contradiction`, `gap`, `ambiguity` or `conflict`. Contradictions and conflicts are always blocking; a gap or ambiguity blocks only when the answer changes outcome, cost, risk or scope.
+  - `spans`: 1 to 10 verbatim excerpts of the intent text (whitespace-normalised match).
+  - `options`: at most 10, distinct. `recommended` is required; when there are options it must equal one of them (core refuses a question whose recommendation is not among its options), and free text is valid only with no options. The person can still answer in their own words. For a non-blocking finding `recommended` is also the default.
+  - No text field may contain a NUL, and `question` may not start with a reserved question tag followed by `:` (`unreviewable-exhausted`, `rescope-exhausted`, `merge-conflict`; core's `RESERVED_QUESTION_TAG`, mirrored by `protocol.ReservedQuestionTag`).
+  - `rank`: consequence order, 1 first, unique within a result.
+  - `IntentReviewResult.Validate(req)` checks all of this and the `max_questions` cap.
+- **Recording.** `IntentReviewFinding.AsQuestion()` gives the question gip records: class `intent`, refs `intent-review` and `kind:<kind>`, the first span, and the recommendation as the default when not blocking.
+
+An older gip refuses a manifest that declares `review.intent` or a `role` (manifests are decoded strictly), so ship such a manifest only once the host pins v0.12.2.
 
 ## License
 

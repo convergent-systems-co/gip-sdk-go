@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/convergent-systems-co/gip-sdk-go/protocol"
@@ -70,6 +71,9 @@ func Run(ctx context.Context, dir string) *Report {
 		return r
 	}
 	r.Plugin = m.Name
+	if declaresRoles(m) {
+		add("CNF-009", "role commands have their role's shape", roleShapes(m))
+	}
 	exe := filepath.Join(dir, filepath.FromSlash(m.Executable))
 	if _, err := os.Stat(exe); err != nil {
 		if _, err2 := os.Stat(exe + ".exe"); err2 == nil {
@@ -156,6 +160,55 @@ func Run(ctx context.Context, dir string) *Report {
 		return cmd.Run()
 	}())
 	return r
+}
+
+// roleShapes checks, without invoking anything, that every command role
+// is backed by its capability and has its role's shape, and that a
+// capability that needs a role command (review.intent) has one.
+func roleShapes(m *protocol.Manifest) error {
+	var errs []error
+	if contains(m.Capabilities, protocol.CapReviewIntent) {
+		leaf := m.CommandForRole(protocol.RoleIntentReview)
+		if leaf == nil {
+			errs = append(errs, fmt.Errorf("capability %q declared but no command has role %q", protocol.CapReviewIntent, protocol.RoleIntentReview))
+		}
+	}
+	for _, leaf := range m.Leaves() {
+		c := m.Find(leaf)
+		if c.Role == "" {
+			continue
+		}
+		if capName := protocol.RoleCapability(c.Role); capName == "" || !contains(m.Capabilities, capName) {
+			errs = append(errs, fmt.Errorf("command %q: role %q is not backed by its capability", strings.Join(leaf, " "), c.Role))
+		}
+		if err := protocol.CheckRoleShape(c); err != nil {
+			errs = append(errs, fmt.Errorf("command %q: %w", strings.Join(leaf, " "), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// declaresRoles reports whether the manifest gives a command a role or
+// declares a capability that needs one.
+func declaresRoles(m *protocol.Manifest) bool {
+	if contains(m.Capabilities, protocol.CapReviewIntent) {
+		return true
+	}
+	for _, leaf := range m.Leaves() {
+		if m.Find(leaf).Role != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(xs []string, x string) bool {
+	for _, y := range xs {
+		if y == x {
+			return true
+		}
+	}
+	return false
 }
 
 type eofReader struct{}
