@@ -2,8 +2,10 @@ package protocol
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const reviewerManifest = `{"schema":"gip.plugin-manifest/v1","name":"gip-plugin-discovery","version":"0.1.0","protocol_versions":[1],"executable":"x",
@@ -188,20 +190,24 @@ func TestIntentReviewFindingValidation(t *testing.T) {
 		}
 	}
 	for name, bad := range map[string]func(*IntentReviewFinding){
-		"unknown kind":               func(f *IntentReviewFinding) { f.Kind = "vagueness" },
-		"empty kind":                 func(f *IntentReviewFinding) { f.Kind = "" },
-		"non-blocking contradiction": func(f *IntentReviewFinding) { f.Blocking = false },
-		"non-blocking conflict":      func(f *IntentReviewFinding) { f.Kind = IntentReviewConflict; f.Blocking = false },
-		"no spans":                   func(f *IntentReviewFinding) { f.Spans = nil },
-		"span not verbatim":          func(f *IntentReviewFinding) { f.Spans = []string{"stores notes remotely"} },
-		"blank span":                 func(f *IntentReviewFinding) { f.Spans = []string{"  "} },
-		"no question":                func(f *IntentReviewFinding) { f.Question = "" },
-		"eleven options":             func(f *IntentReviewFinding) { f.Options = strings.Split("a b c d e f g h i j k", " ") },
-		"blank option":               func(f *IntentReviewFinding) { f.Options = []string{"a", ""} },
-		"duplicate option":           func(f *IntentReviewFinding) { f.Options = []string{"a", "a"} },
-		"no recommendation":          func(f *IntentReviewFinding) { f.Recommended = "" },
-		"rank 0":                     func(f *IntentReviewFinding) { f.Rank = 0 },
-		"long rationale":             func(f *IntentReviewFinding) { f.Rationale = strings.Repeat("r", MaxIntentReviewText+1) },
+		"unknown kind":                func(f *IntentReviewFinding) { f.Kind = "vagueness" },
+		"empty kind":                  func(f *IntentReviewFinding) { f.Kind = "" },
+		"non-blocking contradiction":  func(f *IntentReviewFinding) { f.Blocking = false },
+		"non-blocking conflict":       func(f *IntentReviewFinding) { f.Kind = IntentReviewConflict; f.Blocking = false },
+		"no spans":                    func(f *IntentReviewFinding) { f.Spans = nil },
+		"span not verbatim":           func(f *IntentReviewFinding) { f.Spans = []string{"stores notes remotely"} },
+		"blank span":                  func(f *IntentReviewFinding) { f.Spans = []string{"  "} },
+		"no question":                 func(f *IntentReviewFinding) { f.Question = "" },
+		"eleven options":              func(f *IntentReviewFinding) { f.Options = strings.Split("a b c d e f g h i j k", " ") },
+		"blank option":                func(f *IntentReviewFinding) { f.Options = []string{"a", ""} },
+		"duplicate option":            func(f *IntentReviewFinding) { f.Options = []string{"a", "a"} },
+		"no recommendation":           func(f *IntentReviewFinding) { f.Recommended = "" },
+		"recommended outside options": func(f *IntentReviewFinding) { f.Recommended = "something else" },
+		"NUL in question":             func(f *IntentReviewFinding) { f.Question = "why\x00" },
+		"NUL in option":               func(f *IntentReviewFinding) { f.Options = []string{"a\x00", "local first, sync later"} },
+		"reserved tag":                func(f *IntentReviewFinding) { f.Question = "Rescope\u2011exhausted : what now?" },
+		"rank 0":                      func(f *IntentReviewFinding) { f.Rank = 0 },
+		"long rationale":              func(f *IntentReviewFinding) { f.Rationale = strings.Repeat("r", MaxIntentReviewText+1) },
 	} {
 		f := sampleFinding()
 		bad(&f)
@@ -211,7 +217,7 @@ func TestIntentReviewFindingValidation(t *testing.T) {
 	}
 	// Ten options and non-blocking gaps and ambiguities are fine.
 	f := sampleFinding()
-	f.Kind, f.Blocking, f.Options = IntentReviewAmbiguity, false, strings.Split("a b c d e f g h i j", " ")
+	f.Kind, f.Blocking, f.Options, f.Recommended = IntentReviewAmbiguity, false, strings.Split("a b c d e f g h i j", " "), "j"
 	if err := f.Validate(reviewContent); err != nil {
 		t.Fatal(err)
 	}
@@ -220,5 +226,95 @@ func TestIntentReviewFindingValidation(t *testing.T) {
 	_ = json.Unmarshal([]byte(`{"kind":"omission","spans":["Users are teams."],"question":"q","recommended":"r","rank":1}`), &g)
 	if g.Validate(reviewContent) == nil {
 		t.Fatal("kind omission is not an intent review kind")
+	}
+}
+
+// coreQuestionShape mirrors gip core's txn.question/questionShape
+// (src/core/consequence/questions.go at origin/main) for a question a
+// request raises: the rules a recorded intent review question must pass.
+func coreQuestionShape(q PlanQuestion) []string {
+	validText := func(s string, max int) bool {
+		return strings.TrimSpace(s) != "" && len(s) <= max && utf8.ValidString(s) && !strings.ContainsRune(s, 0)
+	}
+	var bad []string
+	if tag := ReservedQuestionTag(q.Text, q.Refs); tag != "" {
+		bad = append(bad, "RESERVED_QUESTION_TAG")
+	}
+	switch q.Class {
+	case QuestionClassIntent, QuestionClassGoal, QuestionClassDecision:
+	default:
+		bad = append(bad, "class")
+	}
+	if !validText(q.Text, 5000) {
+		bad = append(bad, "text")
+	}
+	if q.Span != "" && !validText(q.Span, 5000) {
+		bad = append(bad, "span")
+	}
+	if len(q.Options) > 10 {
+		bad = append(bad, "options count")
+	}
+	for i, o := range q.Options {
+		if !validText(o, 500) || slices.Contains(q.Options[:i], o) {
+			bad = append(bad, "option")
+		}
+	}
+	for _, v := range []string{q.Recommended, q.Default} {
+		if v != "" && !validText(v, 500) {
+			bad = append(bad, "recommended/default")
+		}
+	}
+	if q.Recommended != "" && len(q.Options) > 0 && !slices.Contains(q.Options, q.Recommended) {
+		bad = append(bad, "recommended not an option")
+	}
+	if !q.Blocking && strings.TrimSpace(q.Default) == "" {
+		bad = append(bad, "default")
+	}
+	if len(q.Refs) > 20 {
+		bad = append(bad, "refs count")
+	}
+	for _, r := range q.Refs {
+		if !validText(r, 200) || strings.ContainsAny(r, "\r\n") {
+			bad = append(bad, "ref")
+		}
+	}
+	return bad
+}
+
+// TestIntentReviewCoreCompatibility: whatever the SDK accepts, core's
+// question rules accept as AsQuestion() records it; and the cases core
+// refuses, the SDK refuses first.
+func TestIntentReviewCoreCompatibility(t *testing.T) {
+	ten := sampleFinding()
+	ten.Options, ten.Recommended = strings.Split("a b c d e f g h i j", " "), "c"
+	gap := IntentReviewFinding{Kind: IntentReviewGap, Spans: []string{"Users are teams."}, Question: "How do members sign in?", Recommended: "SSO", Rank: 2}
+	for name, f := range map[string]IntentReviewFinding{"sample": sampleFinding(), "ten options": ten, "free-text gap": gap} {
+		if err := f.Validate(reviewContent); err != nil {
+			t.Fatalf("%s: SDK refused: %v", name, err)
+		}
+		if bad := coreQuestionShape(f.AsQuestion()); len(bad) > 0 {
+			t.Fatalf("%s: core would refuse: %v", name, bad)
+		}
+	}
+	for name, mut := range map[string]func(*IntentReviewFinding){
+		"recommended outside options": func(f *IntentReviewFinding) { f.Recommended = "neither" },
+		"NUL":                         func(f *IntentReviewFinding) { f.Question = "a\x00b" },
+		"reserved tag":                func(f *IntentReviewFinding) { f.Question = "merge-conflict: pick one" },
+		"reserved tag folded":         func(f *IntentReviewFinding) { f.Question = " UNREVIEWABLE\u2010exhausted\uFF1A x" },
+		"eleven options": func(f *IntentReviewFinding) {
+			f.Options = append(strings.Split("a b c d e f g h i j", " "), f.Recommended)
+		},
+	} {
+		f := sampleFinding()
+		mut(&f)
+		if len(coreQuestionShape(f.AsQuestion())) == 0 {
+			t.Fatalf("%s: the case must be one core refuses", name)
+		}
+		if f.Validate(reviewContent) == nil {
+			t.Errorf("%s: the SDK accepted what core refuses", name)
+		}
+	}
+	if ReservedQuestionTag("rescope-exhausted is fine without a colon", nil) != "" || ReservedQuestionTag("x", []string{"Merge-Conflict"}) != "merge-conflict" {
+		t.Fatal("ReservedQuestionTag mirrors core")
 	}
 }

@@ -251,7 +251,8 @@ This release is additive and is numbered v0.12.2, not v0.13.0, because governed-
 - **Result** `{findings: [...], reviewers: [{planner, model}]}`; `findings` is `[]` when nothing new was found. Each finding is `{kind, spans, question, options, recommended, blocking, rank, rationale}`:
   - `kind`: `contradiction`, `gap`, `ambiguity` or `conflict`. Contradictions and conflicts are always blocking; a gap or ambiguity blocks only when the answer changes outcome, cost, risk or scope.
   - `spans`: 1 to 10 verbatim excerpts of the intent text (whitespace-normalised match).
-  - `options`: at most 10; `recommended` is required and need not be one of them. For a non-blocking finding it is also the default.
+  - `options`: at most 10, distinct. `recommended` is required; when there are options it must equal one of them (core refuses a question whose recommendation is not among its options), and free text is valid only with no options. The person can still answer in their own words. For a non-blocking finding `recommended` is also the default.
+  - No text field may contain a NUL, and `question` may not start with a reserved question tag followed by `:` (`unreviewable-exhausted`, `rescope-exhausted`, `merge-conflict`; core's `RESERVED_QUESTION_TAG`, mirrored by `protocol.ReservedQuestionTag`).
   - `rank`: consequence order, 1 first, unique within a result.
   - `IntentReviewResult.Validate(req)` checks all of this and the `max_questions` cap.
 - **Recording.** `IntentReviewFinding.AsQuestion()` gives the question gip records: class `intent`, refs `intent-review` and `kind:<kind>`, the first span, and the recommendation as the default when not blocking.

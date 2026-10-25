@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -190,8 +191,11 @@ type IntentReviewFinding struct {
 	Question string `json:"question"`
 	// Options are suggested answers, at most MaxIntentReviewOptions.
 	Options []string `json:"options,omitempty"`
-	// Recommended is the recommended answer. It need not be one of
-	// Options. For a non-blocking finding it is also the default.
+	// Recommended is the recommended answer. When Options is non-empty
+	// it must equal one of them (gip refuses a question whose
+	// recommendation is not among its options); free text is valid only
+	// with no options. The person may still answer in their own words.
+	// For a non-blocking finding it is also the default.
 	Recommended string `json:"recommended"`
 	// Blocking: the answer changes outcome, cost, risk or scope.
 	// Contradictions and conflicts are always blocking.
@@ -229,6 +233,18 @@ func (f *IntentReviewFinding) Validate(content string) error {
 	if strings.TrimSpace(f.Question) == "" || len(f.Question) > MaxIntentReviewText {
 		add("question must be non-empty and at most %d bytes", MaxIntentReviewText)
 	}
+	if tag := ReservedQuestionTag(f.Question, nil); tag != "" {
+		add("question text may not start with the reserved tag %q (gip RESERVED_QUESTION_TAG)", tag+":")
+	}
+	for _, t := range append(append([]string{f.Kind, f.Question, f.Recommended, f.Rationale}, f.Spans...), f.Options...) {
+		if strings.ContainsRune(t, 0) {
+			add("text fields may not contain a NUL character")
+			break
+		}
+	}
+	if !utf8.ValidString(f.Question) || !utf8.ValidString(f.Recommended) || !utf8.ValidString(f.Rationale) {
+		add("text fields must be valid UTF-8")
+	}
 	if len(f.Options) > MaxIntentReviewOptions {
 		add("at most %d options", MaxIntentReviewOptions)
 	}
@@ -243,6 +259,9 @@ func (f *IntentReviewFinding) Validate(content string) error {
 	if strings.TrimSpace(f.Recommended) == "" || len(f.Recommended) > MaxIntentReviewOptionText {
 		add("recommended must be non-empty and at most %d bytes", MaxIntentReviewOptionText)
 	}
+	if f.Recommended != "" && len(f.Options) > 0 && !contains(f.Options, f.Recommended) {
+		add("recommended %q must be one of the options (free text only with no options)", f.Recommended)
+	}
 	if f.Rank < 1 {
 		add("rank must be at least 1")
 	}
@@ -250,6 +269,44 @@ func (f *IntentReviewFinding) Validate(content string) error {
 		add("rationale must be at most %d bytes", MaxIntentReviewText)
 	}
 	return errors.Join(errs...)
+}
+
+// ReservedQuestionTag returns the reserved tag (ReservedQuestionTags)
+// that refs or text carry, or "": a ref equal to one, or text starting
+// with one followed by a colon. It mirrors gip's
+// frontier.ReservedQuestionTag: both compare folded (case, surrounding
+// space and format characters ignored; Unicode hyphen and colon
+// lookalikes read as "-" and ":"; space allowed before the colon). gip
+// refuses such a question from a plugin with RESERVED_QUESTION_TAG.
+func ReservedQuestionTag(text string, refs []string) string {
+	t := foldTag(text)
+	for _, tag := range ReservedQuestionTags() {
+		if rest, ok := strings.CutPrefix(t, tag); ok && strings.HasPrefix(strings.TrimLeftFunc(rest, unicode.IsSpace), ":") {
+			return tag
+		}
+		for _, r := range refs {
+			if foldTag(r) == tag {
+				return tag
+			}
+		}
+	}
+	return ""
+}
+
+func foldTag(s string) string {
+	s = strings.Map(func(r rune) rune {
+		switch r {
+		case '\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2043', '\u2212', '\u02D7', '\u2E3A', '\u2E3B', '\uFE58', '\uFE63', '\uFF0D':
+			return '-'
+		case '\uFF1A', '\uFE55', '\uFE13', '\u2236', '\uA789', '\u02D0', '\u0589', '\u05C3':
+			return ':'
+		}
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s)
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 // AsQuestion returns the intent question gip records for the finding:
