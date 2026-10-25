@@ -85,9 +85,15 @@ const (
 // host/conflicts/decline returns, as a disposition with Code:
 //
 //	REJECTED        CONFLICT_NOT_OPEN, STALE_REVISION, RATIONALE_REQUIRED
-//	                (a blank reason), NO_INTENT_FOR_QUESTION
-//	HUMAN_REQUIRED  HUMAN_REQUIRED (the project is below rules 3), and the
-//	                grant codes above
+//	                (a blank reason), NO_INTENT_FOR_QUESTION, and
+//	                CONFLICT_OF_INTEREST (the principal contributed to the
+//	                conflicting sides and may not resolve it)
+//	HUMAN_REQUIRED  HUMAN_REQUIRED (the project is below rules 3), the
+//	                grant codes above, and the resolution's own refusals
+//	                HUMAN_CLASS_CONFLICT and AUTHORS_UNKNOWN (core #121,
+//	                #136: decline returns the refusal that the principal's
+//	                resolve would have met; no wire change, doc note from
+//	                v0.12.0)
 //
 // host/conflicts/list answers a refused As with a JSON-RPC error, code
 // CodePermissionDenied, whose data.id is the grant code

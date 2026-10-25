@@ -172,6 +172,10 @@ A command may declare `timeout_seconds`, up to 7200, when one invocation runs lo
 
 The full protocol specification is in the gip repository under `docs/spec/plugin-protocol.md`. A reference plugin is [gip-plugin-discovery](https://github.com/convergent-systems-co/gip-plugin-discovery).
 
+### Prerequisite findings (v0.12.0)
+
+`FindingKindPrerequisite` (`"prerequisite"`) is a finding kind for missing prerequisite work (a seam, protocol, package or capability that does not exist yet). It is always blocking and is never a decision: the planner derives work units for it and the dependent node `depends_on` them; only genuine decisions go to the owner (governed-intent-programming#147). `HostFindingParams.Provides` and `PlanFinding.Provides` (optional, `provides`) name what the prerequisite supplies so an existing unit can be matched. Fields are additive; a gip built against an earlier SDK drops them. Also: the decline refusal codes `CONFLICT_OF_INTEREST`, `HUMAN_CLASS_CONFLICT` and `AUTHORS_UNKNOWN` are documented in `protocol/conflicts.go` (no wire change).
+
 ### Merge-conflict resolution by an agent (v0.11.0)
 
 gip issue #108 (ADR-0025 §3, D4, D5; spec LM-026 to LM-028) lets a plugin acting as an agent that holds a `ledger.resolve` grant decide the merge-conflict ceremonies it is not a party to, or hand one to a person. The plugin permission is `conflicts.resolve` (`PermConflictsResolve`, granted at trust time). No other permission includes it. Without it, every helper refuses locally with `host.permission_denied` and sends nothing.
