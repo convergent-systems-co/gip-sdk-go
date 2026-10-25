@@ -134,14 +134,18 @@ func TestPlanPassQuestions(t *testing.T) {
 // refused finding becomes.
 func TestFindingKinds(t *testing.T) {
 	encodes(t, HostFindingParams{Work: "w", As: "agent:reviewer", Title: "rejected three times", Kind: FindingKindRescope}, []string{`"kind":"rescope"`}, "decision", "blocking")
-	encodes(t, HostFindingParams{Work: "w", As: "agent:x", Title: "t"}, nil, "kind")
+	encodes(t, HostFindingParams{Work: "w", As: "agent:x", Title: "t"}, nil, "kind", "provides")
+	encodes(t, HostFindingParams{Work: "w", As: "agent:x", Title: "t", Blocking: true, Kind: FindingKindPrerequisite, Provides: "passive lookup protocol"}, []string{`"kind":"prerequisite"`, `"provides":"passive lookup protocol"`})
+	if (&PlanFinding{Kind: FindingKindPrerequisite}).EffectiveKind() != FindingKindPrerequisite {
+		t.Fatal("prerequisite kind")
+	}
 	var r HostFindingResult
 	strict(t, `{"disposition":"ACCEPTED","reasons":[],"question":"amb-7","event_seq":3}`, &r)
 	if r.Question != "amb-7" {
 		t.Fatalf("result %+v", r)
 	}
 	encodes(t, HostFindingResult{Reasons: []string{}}, nil, "question")
-	for _, k := range []string{FindingKindWork, FindingKindDecision, FindingKindRescope, FindingKindSplit} {
+	for _, k := range []string{FindingKindWork, FindingKindDecision, FindingKindRescope, FindingKindSplit, FindingKindPrerequisite} {
 		if k == "" {
 			t.Fatal("finding kinds are named")
 		}

@@ -225,6 +225,10 @@ Decide from `refusal` and `adoptable`. `IsAuthor` is for display only, because i
 
 `MergePending` gains `presence_flagged`. A gip that predates these methods answers them with method-not-found.
 
+### Prerequisite findings (v0.12.0)
+
+`FindingKindPrerequisite` (`"prerequisite"`) is a finding kind for missing prerequisite work (a seam, protocol, package or capability that does not exist yet). It is always blocking and is never a decision: the planner derives work units for it and the dependent node `depends_on` them; only genuine decisions go to the owner (governed-intent-programming#147). `HostFindingParams.Provides` and `PlanFinding.Provides` (optional, `provides`) name what the prerequisite supplies so an existing unit can be matched. Fields are additive. A gip built against an earlier SDK drops `provides`, but refuses kind `prerequisite` (`INVALID_PAYLOAD`), so send it only to a host that supports it. Also: the decline refusal codes `CONFLICT_OF_INTEREST`, `HUMAN_CLASS_CONFLICT` and `AUTHORS_UNKNOWN` are documented in `protocol/conflicts.go` (no wire change).
+
 ## License
 
 [PolyForm Noncommercial 1.0.0](LICENSE). Commercial use requires a separate license from Convergent Systems.

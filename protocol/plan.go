@@ -248,6 +248,11 @@ type PlanFinding struct {
 	// stale-finding triage.
 	RecordedSeq  int64 `json:"recorded_seq,omitempty"`
 	RecordedPass int   `json:"recorded_pass,omitempty"`
+	// Provides (SDK v0.12.0, governed-intent-programming #147): for a
+	// FindingKindPrerequisite finding, a one-line name of the seam,
+	// protocol, package or capability the prerequisite supplies. Used to
+	// match an existing work unit before deriving a new one.
+	Provides string `json:"provides,omitempty"`
 }
 
 // EffectiveKind returns the finding's kind: Kind when set, otherwise
@@ -381,15 +386,22 @@ func (d *PlanDocument) Node(a string) (*PlanNode, bool) {
 // plugin needs no work.execute to send a unit back to planning. A gip
 // built against an earlier SDK drops Kind and records a work finding:
 // check that the host supports kinds before relying on them.
+//
+// FindingKindPrerequisite (SDK v0.12.0, governed-intent-programming #147)
+// reports missing prerequisite work: it is always blocking, never a
+// decision, and the planner answers it with derived work units the node
+// depends on. Provides names what the prerequisite supplies.
 type HostFindingParams struct {
-	Work      string `json:"work,omitempty"`
-	Node      string `json:"node,omitempty"`
-	As        string `json:"as"`
-	Title     string `json:"title"`
-	Detail    string `json:"detail,omitempty"`
-	Blocking  bool   `json:"blocking,omitempty"`
-	Decision  bool   `json:"decision,omitempty"`
-	Kind      string `json:"kind,omitempty"`
+	Work     string `json:"work,omitempty"`
+	Node     string `json:"node,omitempty"`
+	As       string `json:"as"`
+	Title    string `json:"title"`
+	Detail   string `json:"detail,omitempty"`
+	Blocking bool   `json:"blocking,omitempty"`
+	Decision bool   `json:"decision,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	// Provides (SDK v0.12.0): see PlanFinding.Provides.
+	Provides  string `json:"provides,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
 }
 

@@ -53,7 +53,7 @@ const (
 )
 
 // Finding kinds (gip ADR-0024 D7). Absent means FindingKindWork; the
-// older Decision flag reads as FindingKindDecision (PlanFinding.EffectiveKind).
+// older Decision flag reads as FindingKindDecision (PlanFinding.EffectiveKind). A prerequisite finding is always blocking.
 const (
 	FindingKindWork     = "work"
 	FindingKindDecision = "decision"
@@ -63,6 +63,14 @@ const (
 	// FindingKindSplit: the unit is too large to review; split it. It
 	// counts as a re-scope and needs no rejections.
 	FindingKindSplit = "split"
+	// FindingKindPrerequisite (SDK v0.12.0, governed-intent-programming
+	// #147): the unit needs a prerequisite (a seam, protocol, package or
+	// capability) that does not exist yet. It is missing work, never a
+	// decision: it is always blocking and is never routed to a person.
+	// The planner derives the prerequisite as work units and makes the
+	// dependent node depend_on them. Name what is missing in
+	// HostFindingParams.Provides so an existing unit can be matched.
+	FindingKindPrerequisite = "prerequisite"
 )
 
 // Question classes: the three things a person is asked.
